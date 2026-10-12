@@ -4,7 +4,7 @@ AISEO runs as three Railway resources built from this one repository:
 
 | Resource | What it runs | Start command |
 |---|---|---|
-| `postgres` | Postgres (app data, pg-boss job queue, LISTEN/NOTIFY) | managed by Railway |
+| `Postgres` | Postgres (app data, pg-boss job queue, LISTEN/NOTIFY) | managed by Railway |
 | `web` | Next.js pages and APIs, auth, Stripe and Bright Data webhooks, live progress | `npm run start` |
 | `worker` | Report pipeline jobs (Bright Data, Claude) and the 5-minute reconciler | `npm run start:worker` |
 
@@ -23,7 +23,7 @@ You need accounts and keys for:
 | [Bright Data](https://brightdata.com) | Collecting answers from Perplexity, ChatGPT and Gemini | API token with Web Scraper API access |
 | [Anthropic](https://console.anthropic.com) | Analysis | API key |
 
-Merge the rebuild into the branch Railway deploys from (`main` in `.railway/railway.ts`; change `SOURCE` there if you deploy another branch or a fork).
+Merge the rebuild into the branch Railway deploys from (`main` in `.railway/railway.ts`; change `SOURCE` there if you deploy another branch or a fork). If a service deploys a different branch (set in **service → Settings → Source**), `railway config apply` moves it back to `SOURCE`.
 
 ## 2. Create the project
 
@@ -39,22 +39,19 @@ The first deploys of `web` and `worker` fail fast with "Invalid web configuratio
 
 ## 3. Give the web service a domain
 
-Run `railway domain --service web` (or `railway domain app.yourdomain.com --service web` for a custom domain), or use **web → Settings → Networking** in the dashboard. The resulting `https://…` URL is your `APP_URL`. Use the same domain for the Turnstile widget and the Stripe webhook below.
+Run `railway domain --service web` (or `railway domain app.yourdomain.com --service web` for a custom domain), or use **web → Settings → Networking** in the dashboard. The resulting `https://…` URL is your `APP_URL`: `https://${{RAILWAY_PUBLIC_DOMAIN}}` follows the generated domain, or set the custom domain explicitly. Use the same domain for the Turnstile widget and the Stripe webhook below.
 
 ## 4. Set the secrets
 
 Secrets are declared with `preserve()` in `.railway/railway.ts`, so the file never contains them and `railway config apply` never overwrites them. Set them once per environment, either in the dashboard (**service → Variables**) or with the CLI (`--skip-deploys` avoids a redeploy per command):
 
 ```bash
-# Both services share the public URL and the webhook signing key.
-# Generate the key once: it must be identical on web and worker.
-WEBHOOK_SECRET=$(openssl rand -hex 32)
-for svc in web worker; do
-  railway variable set --service "$svc" --skip-deploys \
-    "APP_URL=https://your-domain" "WEBHOOK_SIGNING_SECRET=$WEBHOOK_SECRET"
-done
-
+# The web service holds the public URL and both signing keys. The worker
+# references its APP_URL and WEBHOOK_SIGNING_SECRET (${{web.APP_URL}}, set by
+# .railway/railway.ts), so the two services always agree.
 railway variable set --service web --skip-deploys \
+  'APP_URL=https://${{RAILWAY_PUBLIC_DOMAIN}}' \
+  "WEBHOOK_SIGNING_SECRET=$(openssl rand -hex 32)" \
   "BETTER_AUTH_SECRET=$(openssl rand -hex 32)" \
   "TURNSTILE_SITE_KEY=..." "TURNSTILE_SECRET_KEY=..." \
   "RESEND_API_KEY=re_..." "EMAIL_FROM=AISEO <no-reply@yourdomain.com>" \
@@ -69,7 +66,7 @@ railway redeploy --service web --yes
 railway redeploy --service worker --yes
 ```
 
-Each service holds only the secrets it uses. The web service never sees provider keys; the worker never sees auth or Stripe secrets. `DATABASE_URL` is wired to the `postgres` resource by the IaC file. Check what a service has with `railway variable list --service web`.
+Each service holds only the secrets it uses. The web service never sees provider keys; the worker never sees auth or Stripe secrets. `DATABASE_URL` is wired to the `Postgres` database by the IaC file, and `RAILPACK_NODE_VERSION=22` pins the Node major both services build with. Check what a service has with `railway variable list --service web`.
 
 ## 5. Third-party setup
 
@@ -124,9 +121,9 @@ The worker uses `claude-sonnet-5-5` with `ANTHROPIC_EFFORT=medium` and Claude's 
 Enable point-in-time recovery and a backup schedule on the database:
 
 ```bash
-railway postgres pitr enable --service postgres
+railway postgres pitr enable --service Postgres
 railway postgres pitr schedule set --daily --weekly
-railway postgres pitr backup create --service postgres --name pre-launch
+railway postgres pitr backup create --service Postgres --name pre-launch
 ```
 
 Restores create a sibling database service. Point `DATABASE_URL` at it to cut over.
@@ -148,7 +145,7 @@ Restores create a sibling database service. Point `DATABASE_URL` at it to cut ov
 
 ### What each report costs
 
-Every paid call is recorded in the `report_usage` table: each Claude request (tokens and the model that served it, priced from `src/server/pipeline/costs.ts`) and each delivered Bright Data snapshot (records, priced at `BRIGHTDATA_COST_PER_1K_RECORDS`, counted once even when a retried job downloads it again). Retries and failed reports are included, since they are billed too. The worker also logs `[pipeline] report completed` with `costUsd`. Run these with `railway connect postgres`:
+Every paid call is recorded in the `report_usage` table: each Claude request (tokens and the model that served it, priced from `src/server/pipeline/costs.ts`) and each delivered Bright Data snapshot (records, priced at `BRIGHTDATA_COST_PER_1K_RECORDS`, counted once even when a retried job downloads it again). Retries and failed reports are included, since they are billed too. The worker also logs `[pipeline] report completed` with `costUsd`. Run these with `railway connect Postgres`:
 
 ```sql
 -- Cost per report type and plan over the last 30 days
@@ -172,7 +169,7 @@ Prices in `costs.ts` are list prices; update them if Anthropic's pricing changes
 ### Rotating secrets
 
 - `BETTER_AUTH_SECRET`: rotating it signs everyone out.
-- `WEBHOOK_SIGNING_SECRET`: update **both** services. Collections already running lose their webhook; the timeout poller picks them up within 16 minutes.
+- `WEBHOOK_SIGNING_SECRET`: change it on the web service (the worker references it), then redeploy **both** services. Collections already running lose their webhook; the timeout poller picks them up within 16 minutes.
 - Stripe, Resend, Turnstile, Anthropic, Bright Data: rotate in the provider, update the variable, redeploy the service that uses it.
 
 ## 8. Local development

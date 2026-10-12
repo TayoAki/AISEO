@@ -13,20 +13,21 @@
  */
 import { defineRailway, github, group, postgres, preserve, project, service } from "railway/iac";
 
-// The branch Railway deploys from. Merge the rebuild into it first.
+// The branch Railway deploys from. Merge the rebuild into it first: until
+// then the services deploy claude/optimistic-tesla-ky3owd (set in the
+// dashboard), and applying this file would move them to main.
 const SOURCE = github("TayoAki/AISEO", { branch: "main" });
 
 export default defineRailway((ctx) => {
   const production = ctx.environment === "production";
-  const db = postgres("postgres");
+  // "Postgres" is the name Railway's Postgres template gives the database.
+  const db = postgres("Postgres");
 
-  // Both services: the database, the public URL (used in emails and as the
-  // Bright Data webhook base) and the HMAC key for webhook URLs.
   const common = {
     NODE_ENV: "production",
     DATABASE_URL: db.env.DATABASE_URL,
-    APP_URL: preserve(),
-    WEBHOOK_SIGNING_SECRET: preserve(),
+    // Railpack would otherwise pick the newest Node release matching engines.
+    RAILPACK_NODE_VERSION: "22",
   };
 
   const web = service("web", {
@@ -46,6 +47,11 @@ export default defineRailway((ctx) => {
     },
     env: {
       ...common,
+      // Public URL (emails, Stripe redirects, Bright Data webhook base), set
+      // to https://${{RAILWAY_PUBLIC_DOMAIN}} or your custom domain.
+      APP_URL: preserve(),
+      // HMAC key for Bright Data webhook URLs; the worker reads the same value.
+      WEBHOOK_SIGNING_SECRET: preserve(),
       BETTER_AUTH_SECRET: preserve(),
       TRUSTED_IP_HEADER: "x-real-ip",
       TURNSTILE_SITE_KEY: preserve(),
@@ -76,6 +82,9 @@ export default defineRailway((ctx) => {
     },
     env: {
       ...common,
+      // Always identical to the web service's values.
+      APP_URL: web.env.APP_URL,
+      WEBHOOK_SIGNING_SECRET: web.env.WEBHOOK_SIGNING_SECRET,
       ANTHROPIC_API_KEY: preserve(),
       // Sonnet 5.5 costs about half of Opus 5.5 per report ("claude-opus-5-5" for maximum depth).
       ANTHROPIC_MODEL: "claude-sonnet-5-5",
