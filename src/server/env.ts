@@ -70,26 +70,13 @@ const envSchema = z
     billingEnabled: Boolean(env.STRIPE_SECRET_KEY),
   }))
   .superRefine((env, ctx) => {
+    // Checks every production process needs; secrets used by only one
+    // service are checked by assertProductionConfig() in that service.
     if (env.NODE_ENV !== "production") return;
     const problems: string[] = [];
-    if (env.BETTER_AUTH_SECRET === DEV_SECRET) problems.push("BETTER_AUTH_SECRET must be set");
-    if (env.WEBHOOK_SIGNING_SECRET === DEV_SECRET) problems.push("WEBHOOK_SIGNING_SECRET must be set");
-    if (env.TURNSTILE_SECRET_KEY === TURNSTILE_TEST_SECRET_KEY)
-      problems.push("TURNSTILE_SECRET_KEY must be a real key");
     if (env.PROVIDER_MODE === "fake") problems.push("PROVIDER_MODE=fake is not allowed");
-    if (!env.RESEND_API_KEY) problems.push("RESEND_API_KEY must be set");
-    if (!env.ANTHROPIC_API_KEY) problems.push("ANTHROPIC_API_KEY must be set");
-    if (!env.BRIGHTDATA_API_TOKEN) problems.push("BRIGHTDATA_API_TOKEN must be set");
-    if (!env.STRIPE_SECRET_KEY || !env.STRIPE_WEBHOOK_SECRET) problems.push("Stripe keys must be set");
-    for (const key of [
-      "STRIPE_PRICE_PRO_MONTHLY",
-      "STRIPE_PRICE_PRO_ANNUAL",
-      "STRIPE_PRICE_PLUS_MONTHLY",
-      "STRIPE_PRICE_PLUS_ANNUAL",
-    ] as const) {
-      if (!env[key]) problems.push(`${key} must be set`);
-    }
     if (!env.APP_URL.startsWith("https://")) problems.push("APP_URL must be https in production");
+    if (env.WEBHOOK_SIGNING_SECRET === DEV_SECRET) problems.push("WEBHOOK_SIGNING_SECRET must be set");
     for (const message of problems) ctx.addIssue({ code: "custom", message });
   });
 
@@ -113,4 +100,44 @@ export function getEnv(): Env {
 /** For tests only. */
 export function resetEnvCache(): void {
   cached = undefined;
+}
+
+export type ServiceRole = "web" | "worker";
+
+const PRODUCTION_REQUIREMENTS: Record<ServiceRole, (env: Env) => string[]> = {
+  web: (env) => [
+    ...(env.BETTER_AUTH_SECRET === DEV_SECRET ? ["BETTER_AUTH_SECRET must be set"] : []),
+    ...(env.TURNSTILE_SITE_KEY === TURNSTILE_TEST_SITE_KEY ? ["TURNSTILE_SITE_KEY must be a real key"] : []),
+    ...(env.TURNSTILE_SECRET_KEY === TURNSTILE_TEST_SECRET_KEY ? ["TURNSTILE_SECRET_KEY must be a real key"] : []),
+    ...(env.RESEND_API_KEY ? [] : ["RESEND_API_KEY must be set"]),
+    ...(
+      [
+        "STRIPE_SECRET_KEY",
+        "STRIPE_WEBHOOK_SECRET",
+        "STRIPE_PRICE_PRO_MONTHLY",
+        "STRIPE_PRICE_PRO_ANNUAL",
+        "STRIPE_PRICE_PLUS_MONTHLY",
+        "STRIPE_PRICE_PLUS_ANNUAL",
+      ] as const
+    )
+      .filter((key) => !env[key])
+      .map((key) => `${key} must be set`),
+  ],
+  worker: (env) => [
+    ...(env.ANTHROPIC_API_KEY ? [] : ["ANTHROPIC_API_KEY must be set"]),
+    ...(env.BRIGHTDATA_API_TOKEN ? [] : ["BRIGHTDATA_API_TOKEN must be set"]),
+  ],
+};
+
+/**
+ * Production refuses to run a service without the secrets it uses or with
+ * test defaults. Each service checks only what it needs, so the worker never
+ * holds auth or Stripe secrets and the web service never holds provider keys.
+ */
+export function assertProductionConfig(role: ServiceRole, env: Env = getEnv()): void {
+  if (env.NODE_ENV !== "production") return;
+  const problems = PRODUCTION_REQUIREMENTS[role](env);
+  if (problems.length > 0) {
+    throw new Error(`Invalid ${role} configuration:\n${problems.map((p) => `  - ${p}`).join("\n")}`);
+  }
 }

@@ -13,13 +13,14 @@ import { getDb } from "../db/client";
 import { account, rateLimit, session, subscription, user, verification } from "../db/schema";
 import { sendEmail } from "../email/send";
 import { resetPasswordEmail, verificationEmail } from "../email/templates";
-import { getEnv } from "../env";
+import { assertProductionConfig, getEnv } from "../env";
 import { isDisposableEmail, normalizeEmail } from "./email-policy";
 
 const SIGN_UP_REJECTED = "We couldn't create an account with this email address. Try signing in, or use a different address.";
 
 function createAuth() {
   const env = getEnv();
+  assertProductionConfig("web", env);
   const db = getDb();
 
   // Placeholders keep the plugin's endpoints typed when billing is off locally;

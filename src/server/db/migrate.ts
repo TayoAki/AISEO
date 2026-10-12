@@ -1,7 +1,7 @@
 /**
  * Applies Drizzle migrations, installs/updates the pg-boss schema and creates
- * the pipeline queues. Run once per deploy (Railway pre-deploy command):
- *   npm run db:migrate
+ * the pipeline queues. Locally: `npm run db:migrate`. On Railway the bundled
+ * copy runs as the web service's pre-deploy command: `npm run db:migrate:deploy`.
  */
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 

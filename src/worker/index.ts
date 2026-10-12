@@ -4,7 +4,7 @@
  * `node dist/worker.js` in production.
  */
 import { getDb, getPool } from "../server/db/client";
-import { getEnv } from "../server/env";
+import { assertProductionConfig, getEnv } from "../server/env";
 import { createBoss } from "../server/pipeline/boss";
 import {
   handleAnalyze,
@@ -27,6 +27,7 @@ import {
 
 async function main(): Promise<void> {
   const env = getEnv();
+  assertProductionConfig("worker", env);
   const boss = createBoss("worker");
   await boss.start();
   await ensureQueues(boss);
