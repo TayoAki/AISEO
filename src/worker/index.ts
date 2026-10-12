@@ -94,5 +94,10 @@ async function main(): Promise<void> {
 
 main().catch((error: unknown) => {
   console.error("[worker] failed to start", error);
-  process.exit(1);
+  if (process.env.NODE_ENV !== "production") process.exit(1);
+  // A missing key or an unreachable database doesn't fix itself in a second.
+  // Wait before exiting so Railway's ALWAYS restart policy retries once a
+  // minute instead of spinning; a redeploy's SIGTERM still stops it at once.
+  process.once("SIGTERM", () => process.exit(1));
+  setTimeout(() => process.exit(1), 60_000);
 });

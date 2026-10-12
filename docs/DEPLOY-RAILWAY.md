@@ -35,7 +35,7 @@ railway config plan          # review: 1 database + 2 services
 railway config apply
 ```
 
-The first deploys of `web` and `worker` fail fast with "Invalid web configuration" or "Invalid worker configuration". That's expected: their secrets aren't set yet. Each service lists exactly what is missing in its deploy logs.
+The first deploys of `web` and `worker` fail with "Invalid web configuration" or "Invalid worker configuration". That's expected: their secrets aren't set yet. Each service lists exactly what is missing in its deploy logs. The web deploy fails its health check (the previous version, if any, keeps serving); the worker waits a minute after a failed start before exiting, so its restart policy retries once a minute instead of spinning.
 
 ## 3. Give the web service a domain
 
