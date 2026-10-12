@@ -34,7 +34,7 @@ The security record is busy. There are 37 GitHub advisories in total, 27 of them
 - **[about 12.5 months old]** Auth.js (formerly NextAuth.js) has been maintained by the Better Auth team since **2025-09-22**. Security patches continue, and new projects are steered to Better Auth. — [Better Auth blog: Auth.js joins Better Auth](https://www.better-auth.com/blog/authjs-joins-better-auth) (via search summary)
 - **Vercel acquisition, announced 2026-07-07.**
   - Terms were not disclosed. The founder and core team joined Vercel.
-  - Vercel's post says: "The library remains free and open source under MIT". It says the project keeps its name and "the same open contribution model and community governance". It describes Better Auth as "framework-agnostic, runs anywhere".
+  - Vercel's post says: "The library remains free and open source under MIT". It says the project keeps its name and that the team will continue the same open contribution model and community governance (paraphrased by the fetch tool, not a verbatim quote). It describes Better Auth as "framework-agnostic, runs anywhere".
   - Stated focus: agent identity ("Agent Auth"), to be brought to "Vercel Connect" and "eve".
   - Figures cited at the time: 4.7M+ weekly npm downloads and 850+ contributors. — [Vercel blog](https://vercel.com/blog/vercel-acquires-better-auth); [Better Auth blog: joins Vercel](https://better-auth.com/blog/better-auth-joins-vercel); [Dealroom](https://dealroom.co/news/137900-vercel-acquires-better-auth-a-year-after-ethiopian-founders-5m-seed/)
 - The Better Auth post says the team first tried a monetized "platform act one". That was **Better Auth Infrastructure** (dashboard, security, audit logs), launched "January 1" (the year is not stated; 2026 is inferred). The post says the move lets the team focus on the framework "without shaping strategy around monetization". It does not say what happens to Infrastructure. — [Better Auth blog: joins Vercel](https://better-auth.com/blog/better-auth-joins-vercel)
@@ -95,7 +95,7 @@ The security record is busy. There are 37 GitHub advisories in total, 27 of them
 
 ### Inferences
 - The current build runs Better Auth 1.6 with email verification off. If it also has magic link or email OTP plus open sign-up, it was exposed to GHSA-qq9h until 1.6.22. If it also has magic link plus any social login, it is exposed to GHSA-965c on every 1.6.x. The rebuild should pin `>= 1.7.7` and treat Better Auth upgrades as a recurring maintenance task, perhaps with Dependabot or Renovate plus GHSA alerts.
-- There is no published support window. The previous minor line got backports for only about 2–8 weeks after the next minor. Plan to stay on the latest minor rather than an "LTS" line.
+- There is no published support window. The previous minor line got backports for only about 2–4 weeks after the next minor (1.4.22 came two weeks after 1.5.0; 1.6.33 came about four weeks after 1.7.0). Plan to stay on the latest minor rather than an "LTS" line.
 - The burst of 2026 advisories (a 13-advisory batch on 2026-05-31; a Vercel-credited finding on 2026-06-26) suggests much more security scrutiny around the acquisition. That is good for long-term hardening, but in the near term it means churn.
 - Many advisories have no CVE ID. Scanners that only read CVEs may miss them; npm audit and Dependabot use GHSA IDs, so those should catch them.
 - Download growth (about 20× in a year, now above next-auth) makes abandonment unlikely. Vercel ownership changes the incentive structure, but the MIT license limits lock-in risk.
@@ -154,7 +154,7 @@ The key gotchas:
   - Secondary-storage rate limiting requires `SecondaryStorage.increment`.
   - The in-memory store is a process-local `Map` capped at 100,000 entries.
   - If no client IP can be resolved, the limiter logs a warning and **falls back to a single shared per-path bucket**. — [better-auth@1.7.7 tarball, dist/api/rate-limiter/index.mjs](https://registry.npmjs.org/better-auth/-/better-auth-1.7.7.tgz)
-- **Server-side calls are exempt.** The docs say: "Requests made through `auth.api` on the server are exempt. Only client-initiated requests are limited." — [Rate limit docs](https://www.better-auth.com/docs/concepts/rate-limit)
+- **Server-side calls are exempt.** The docs state that requests made through `auth.api` on the server are exempt, and that only client-initiated requests are rate limited (paraphrased). — [Rate limit docs](https://www.better-auth.com/docs/concepts/rate-limit)
 - Code confirms the order of checks in the router's `onRequest`: disabled paths, then the rate limiter, then each plugin's `onRequest` hook. The CAPTCHA plugin is implemented as such a hook. — [better-auth@1.7.7 tarball, dist/api/index.mjs and dist/plugins/captcha/index.mjs](https://registry.npmjs.org/better-auth/-/better-auth-1.7.7.tgz)
 - Client IP detection:
   - The default header is `x-forwarded-for`, but **comma-separated chains are not trusted by default**.
@@ -162,7 +162,7 @@ The key gotchas:
   - `trustedProxies` takes IPs or CIDRs and walks the chain right to left.
   - IPv6 addresses are grouped by `/64` by default (`ipv6Subnet`), which addresses the IPv6-rotation bypass advisory.
   - The docs warn that the origin must be reachable only through proxies that sanitize these headers. — [Rate limit docs](https://www.better-auth.com/docs/concepts/rate-limit)
-- On multiple instances (from GHSA-44jh's workaround text): in-memory storage means "each instance then keeps its own counter, so a single shared limit may not hold across multiple instances or serverless deployments". Recommended alternatives are secondary storage (e.g. Redis), atomic custom storage, or an upstream gateway limit. — [GHSA-44jh-23m7-hpcf](https://github.com/better-auth/better-auth/security/advisories/GHSA-44jh-23m7-hpcf)
+- On multiple instances, GHSA-44jh's workaround text notes (paraphrased) that with in-memory storage each instance keeps its own counter, so one shared limit may not hold across multiple instances or serverless deployments. Recommended alternatives are secondary storage (e.g. Redis), atomic custom storage, or an upstream gateway limit. — [GHSA-44jh-23m7-hpcf](https://github.com/better-auth/better-auth/security/advisories/GHSA-44jh-23m7-hpcf)
 - Official Redis storage: `@better-auth/redis-storage` (ioredis); 37,583 weekly downloads. Secondary storage must implement `get`, `getAndDelete`, `increment(key, ttl)`, `set` and `delete`. `increment` and `getAndDelete` became **required in 1.7**. — [Database docs](https://better-auth.com/docs/concepts/database.md); [1.7 upgrade guide](https://better-auth.com/docs/guides/1-7-upgrade-guide.md); [npm downloads API](https://api.npmjs.org/downloads/point/last-week/@better-auth%2Fredis-storage)
 - Rate-limiter issue history on GitHub:
   - "rate limiting not working on magic links" (#3264, closed 2025-12-16)
