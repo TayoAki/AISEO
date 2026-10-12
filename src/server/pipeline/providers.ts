@@ -11,12 +11,17 @@ import {
 import { FakeCollectionProvider, FakeLlm } from "./fake-providers";
 import { AnthropicLlm, type StructuredLlm } from "./llm";
 
-export type Providers = { collections: CollectionProvider; llm: StructuredLlm };
+export type Providers = {
+  collections: CollectionProvider;
+  llm: StructuredLlm;
+  /** Bright Data list price per delivered record, for cost reporting. */
+  costPerRecordUsd: number;
+};
 export type Platform = "perplexity" | "chatgpt" | "gemini";
 
 export function createProviders(env: Env): Providers {
   if (env.PROVIDER_MODE === "fake") {
-    return { collections: new FakeCollectionProvider({ notify: true }), llm: new FakeLlm() };
+    return { collections: new FakeCollectionProvider({ notify: true }), llm: new FakeLlm(), costPerRecordUsd: 0 };
   }
   if (!env.BRIGHTDATA_API_TOKEN) throw new Error("BRIGHTDATA_API_TOKEN is required when PROVIDER_MODE=live");
   if (!env.ANTHROPIC_API_KEY) throw new Error("ANTHROPIC_API_KEY is required when PROVIDER_MODE=live");
@@ -28,6 +33,7 @@ export function createProviders(env: Env): Providers {
       effort: env.ANTHROPIC_EFFORT,
       refusalFallback: env.ANTHROPIC_REFUSAL_FALLBACK,
     }),
+    costPerRecordUsd: env.BRIGHTDATA_COST_PER_1K_RECORDS / 1000,
   };
 }
 

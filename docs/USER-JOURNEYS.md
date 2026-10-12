@@ -33,7 +33,8 @@ This document describes every path a person can take through AISEO and the backg
    - [S7. Stripe webhooks and entitlements](#s7-stripe-webhooks-and-entitlements)
    - [S8. Live progress plumbing](#s8-live-progress-plumbing)
    - [S9. Email](#s9-email)
-   - [S10. Abuse and cost controls](#s10-abuse-and-cost-controls)
+   - [S10. Cost tracking](#s10-cost-tracking)
+   - [S11. Abuse and cost controls](#s11-abuse-and-cost-controls)
 6. [Guarantees and edge cases](#6-guarantees-and-edge-cases)
 7. [Where each journey lives in the code](#7-where-each-journey-lives-in-the-code)
 
@@ -480,7 +481,11 @@ All email goes through `src/server/email/send.ts` (Resend) using the templates i
 
 Without `RESEND_API_KEY` (local development), emails are printed to the web server's console so links can be opened directly. Production refuses to start without the key or with a placeholder `EMAIL_FROM` (Resend rejects unverified senders). Send failures are logged as `[email] send failed` even where the caller (Better Auth) swallows the error, and the resend and forgot-password forms show an error when the server can't send.
 
-### S10. Abuse and cost controls
+### S10. Cost tracking
+
+Every paid provider call is recorded per report in `report_usage` (`src/server/pipeline/costs.ts`). Each Claude request records its tokens and the model that served it (with a refusal fallback, each attempt at its own model's rates), and each delivered Bright Data snapshot records its rows once, even if a retried job downloads it again. Costs are stored in micro-dollars from list prices, and retries and failed (refunded) reports are included, because they are billed. Recording never fails a job, since that would retry it and pay twice. Queries for cost per report and per plan are in `docs/DEPLOY-RAILWAY.md`.
+
+### S11. Abuse and cost controls
 
 Each report costs real money (Bright Data scrapes and Claude tokens), so free usage is fenced in layers:
 

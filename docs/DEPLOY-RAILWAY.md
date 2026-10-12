@@ -101,7 +101,7 @@ Create an API token with Web Scraper API access. The default dataset ids in `src
 
 ### Anthropic
 
-The worker uses `claude-opus-5-5` with `ANTHROPIC_EFFORT=medium` and Claude's server-side refusal fallback (`ANTHROPIC_REFUSAL_FALLBACK=true`). To lower the cost per report, set `ANTHROPIC_MODEL=claude-sonnet-5-5` in `.railway/railway.ts` (or on the worker's variables) and redeploy.
+The worker uses `claude-sonnet-5-5` with `ANTHROPIC_EFFORT=medium` and Claude's server-side refusal fallback (`ANTHROPIC_REFUSAL_FALLBACK=true`; on Sonnet 5.5 it retries `cyber` and `frontier_llm` declines). `claude-opus-5-5` gives deeper analysis at about twice the cost per report; set `ANTHROPIC_MODEL` on the worker and redeploy to switch. Claude Haiku 5.5 is far cheaper but has no server-side fallback: if you try it, also set `ANTHROPIC_REFUSAL_FALLBACK=false`, and compare report quality first.
 
 ## 6. How deploys work
 
@@ -145,6 +145,29 @@ Restores create a sibling database service. Point `DATABASE_URL` at it to cut ov
 | `[email] send failed` | Resend rejected or didn't answer; check the key, sender domain and Resend status |
 | `[pipeline] report failed after exhausting retries` | A job kept failing until pg-boss dead-lettered it (credit refunded) |
 | `[stripe] no local row for subscription` | A Stripe subscription has no matching row (usually a checkout that didn't finish) |
+
+### What each report costs
+
+Every paid call is recorded in the `report_usage` table: each Claude request (tokens and the model that served it, priced from `src/server/pipeline/costs.ts`) and each delivered Bright Data snapshot (records, priced at `BRIGHTDATA_COST_PER_1K_RECORDS`, counted once even when a retried job downloads it again). Retries and failed reports are included, since they are billed too. The worker also logs `[pipeline] report completed` with `costUsd`. Run these with `railway connect postgres`:
+
+```sql
+-- Cost per report type and plan over the last 30 days
+select r.type, r.tier, count(distinct r.id) as reports,
+       round(sum(u.cost_micros) / 1e6 / count(distinct r.id), 4) as avg_cost_usd,
+       round(sum(u.cost_micros) / 1e6, 2) as total_usd
+from report_usage u join report r on r.id = u.report_id
+where u.created_at > now() - interval '30 days'
+group by r.type, r.tier order by total_usd desc;
+
+-- Where the money goes: provider and task
+select provider, task, model, count(*) as calls,
+       sum(input_tokens) as input_tokens, sum(output_tokens) as output_tokens,
+       sum(records) as records, round(sum(cost_micros) / 1e6, 2) as usd
+from report_usage where created_at > now() - interval '30 days'
+group by 1, 2, 3 order by usd desc nulls last;
+```
+
+Prices in `costs.ts` are list prices; update them if Anthropic's pricing changes or you negotiate a discount.
 
 ### Rotating secrets
 

@@ -35,7 +35,8 @@ export async function generateVisibilityPrompts(llm: StructuredLlm, input: Visib
     system: PROMPT_SYSTEM,
     prompt: `Topic or category: ${input.topic}\nAudited brand (never mention): ${input.brand}\nAudited website (never mention): ${host}`,
     schema: promptPlanSchema,
-    maxTokens: 4_000,
+    // Thinking counts toward max_tokens; leave room for it plus five short questions.
+    maxTokens: 8_000,
     // Short task: fail fast so the start job never outlives its expiry.
     timeoutMs: 2 * 60 * 1000,
     fakeContext: { topic: input.topic },

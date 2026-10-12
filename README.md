@@ -19,7 +19,7 @@ This is a ground-up rebuild of the RankSEO tutorial app with a simpler, more rob
 | Jobs | pg-boss on the same Postgres (no Redis): idempotent pipeline jobs, dead letters, a reconciler cron |
 | Live progress | Server-sent events fed by Postgres `LISTEN/NOTIFY` |
 | AI answers | Bright Data scrapers (Perplexity, ChatGPT, Gemini) with signed webhooks |
-| Analysis | Claude via the Anthropic SDK, schema-validated structured output |
+| Analysis | Claude Sonnet 5.5 via the Anthropic SDK, schema-validated structured output; each report's real cost is recorded in `report_usage` |
 | Hosting | Railway: `web` and `worker` services plus Postgres, declared in [`.railway/railway.ts`](.railway/railway.ts) |
 
 Every user journey and background flow (sign-up to billing, retries, refunds, the reconciler) is described with diagrams in **[docs/USER-JOURNEYS.md](docs/USER-JOURNEYS.md)**.

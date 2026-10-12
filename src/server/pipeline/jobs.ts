@@ -12,6 +12,7 @@
  */
 import { and, eq, inArray, isNull, lt, sql } from "drizzle-orm";
 import type { PgBoss } from "pg-boss";
+import type { z } from "zod";
 
 import { reportInputSchema } from "@/lib/report-input";
 
@@ -21,8 +22,10 @@ import type { Env } from "../env";
 import { settleReservation } from "../quota/quota";
 import { keywordResultSchema, visibilityResultSchema } from "../reports/results";
 import { advanceReport, completeReport, failReport, isTerminal, notifyReport } from "../reports/state";
+import { claudeUsageRows, recordUsage, reportCostUsd } from "./costs";
 import { describeError, NonRetryableError, type FailureCode } from "./errors";
 import { analyzeKeyword } from "./keyword";
+import type { StructuredLlm, StructuredRequest } from "./llm";
 import { collectionRequest, platformsFor, type Providers } from "./providers";
 import { QUEUES, type ReportJobData, type TimeoutJobData } from "./queues";
 import { parseCollection, type ParsedCollection } from "./records";
@@ -76,6 +79,17 @@ export async function runReportJob(
   }
 }
 
+/** The provider's model client, recording every billed call against this report. */
+function meteredLlm(deps: PipelineDeps, reportId: string): StructuredLlm {
+  return {
+    generate: <S extends z.ZodType>(request: StructuredRequest<S>) =>
+      deps.providers.llm.generate({
+        ...request,
+        onUsage: (attempts) => recordUsage(deps.db, reportId, claudeUsageRows(request.task, attempts)),
+      }),
+  };
+}
+
 /** Cheap re-check before spending money: a report may end while a job is still running. */
 async function isStillActive(db: Database, reportId: string): Promise<boolean> {
   const [row] = await db.select({ status: report.status }).from(report).where(eq(report.id, reportId)).limit(1);
@@ -119,7 +133,7 @@ export async function handleStart(deps: PipelineDeps, { reportId }: ReportJobDat
   // Prompts are persisted before any scrape so retries reuse them.
   let prompts = row.prompts;
   if (input.type === "visibility" && !prompts) {
-    const generated = await generateVisibilityPrompts(providers.llm, input);
+    const generated = await generateVisibilityPrompts(meteredLlm(deps, reportId), input);
     await db.update(report).set({ prompts: generated }).where(and(eq(report.id, reportId), isNull(report.prompts)));
     prompts = (await loadReport(db, reportId))?.prompts ?? generated;
     await notifyReport(db, reportId);
@@ -263,10 +277,23 @@ export async function handleAnalyze(deps: PipelineDeps, { reportId }: ReportJobD
     const records = await providers.collections.download(collection.snapshotId);
     const result = parseCollection(records);
     parsed[collection.platform] = result;
-    await db
+    // Bright Data bills a snapshot once, however often a retried job downloads it:
+    // only the first download sets record_count and records the cost.
+    const first = await db
       .update(reportCollection)
       .set({ recordCount: result.total, errorCount: result.errorRows })
-      .where(eq(reportCollection.id, collection.id));
+      .where(and(eq(reportCollection.id, collection.id), isNull(reportCollection.recordCount)))
+      .returning({ id: reportCollection.id });
+    if (first.length > 0) {
+      await recordUsage(db, reportId, [
+        {
+          provider: "brightdata",
+          task: `collect:${collection.platform}`,
+          records: result.total,
+          costMicros: Math.round(result.total * providers.costPerRecordUsd * 1_000_000),
+        },
+      ]);
+    }
   }
 
   await advanceReport(db, reportId, { status: "analyzing", progress: 75, step: "Analyzing the evidence" });
@@ -274,17 +301,21 @@ export async function handleAnalyze(deps: PipelineDeps, { reportId }: ReportJobD
   let result: unknown;
   if (input.type === "keyword") {
     const perplexity = parsed.perplexity ?? { total: 0, answers: [], errorRows: 0, errorSamples: [] };
-    result = keywordResultSchema.parse(await analyzeKeyword({ input, parsed: perplexity, llm: providers.llm, paid }));
+    result = keywordResultSchema.parse(
+      await analyzeKeyword({ input, parsed: perplexity, llm: meteredLlm(deps, reportId), paid }),
+    );
   } else {
     if (!row.prompts?.length) throw new NonRetryableError("INTERNAL", "Visibility report reached analysis without prompts");
     const collections: VisibilityCollections = { chatgpt: parsed.chatgpt, gemini: parsed.gemini };
     result = visibilityResultSchema.parse(
-      await analyzeVisibility({ input, prompts: row.prompts, collections, llm: providers.llm, paid }),
+      await analyzeVisibility({ input, prompts: row.prompts, collections, llm: meteredLlm(deps, reportId), paid }),
     );
   }
 
   await advanceReport(db, reportId, { status: "analyzing", progress: 90, step: "Building your report" });
-  await completeReport(db, reportId, result);
+  if (await completeReport(db, reportId, result)) {
+    console.info("[pipeline] report completed", { reportId, type: input.type, tier: row.tier, costUsd: await reportCostUsd(db, reportId) });
+  }
 }
 
 export async function handleTimeout(deps: PipelineDeps, { reportId, attempt }: TimeoutJobData): Promise<void> {

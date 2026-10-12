@@ -20,7 +20,7 @@ Next.js 16 app plus a pg-boss worker on one Postgres. Read `docs/USER-JOURNEYS.m
 - **Configuration** goes through `getEnv()` in `src/server/env.ts`. A new variable also needs `.env.example`, `.railway/railway.ts` (with `preserve()` for secrets) and, if production requires it, the right role in `assertProductionConfig`.
 - **Input validation**: report inputs use the Zod schemas in `src/lib/report-input.ts`, shared by the forms and the API.
 - **Migrations** must be backward compatible: web and worker deploy independently.
-- **Claude calls** go through `src/server/pipeline/llm.ts` (structured output, refusal handling, timeouts sized below the analyze job's expiry).
+- **Claude calls** go through `src/server/pipeline/llm.ts` (structured output, refusal handling, timeouts sized below the analyze job's expiry), via the per-report `meteredLlm` in jobs so each call's cost lands in `report_usage`. A new paid provider call must record its cost too (`src/server/pipeline/costs.ts`).
 
 ## Next.js 16 specifics used here
 

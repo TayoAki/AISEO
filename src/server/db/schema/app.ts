@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import {
+  bigint,
   check,
   index,
   integer,
@@ -138,6 +139,37 @@ export const reportCollection = pgTable(
     ...timestamps,
   },
   (t) => [unique("report_collection_platform_uq").on(t.reportId, t.platform)],
+);
+
+/**
+ * What each report cost to produce: one row per paid provider call (a Claude
+ * request, or a delivered Bright Data snapshot). Retries and failed reports are
+ * included, because they are billed too. Costs are USD in micro-dollars.
+ */
+export const reportUsage = pgTable(
+  "report_usage",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    reportId: uuid("report_id")
+      .notNull()
+      .references(() => report.id, { onDelete: "cascade" }),
+    /** "anthropic" or "brightdata". */
+    provider: text("provider").notNull(),
+    /** e.g. "keyword-analysis", "visibility-prompts", "collect:chatgpt". */
+    task: text("task").notNull(),
+    /** The Claude model that served the call (differs from the request when a fallback ran). */
+    model: text("model"),
+    inputTokens: integer("input_tokens").notNull().default(0),
+    outputTokens: integer("output_tokens").notNull().default(0),
+    cacheReadTokens: integer("cache_read_tokens").notNull().default(0),
+    cacheWriteTokens: integer("cache_write_tokens").notNull().default(0),
+    /** Bright Data rows delivered (billed per record, error rows included). */
+    records: integer("records").notNull().default(0),
+    /** Null when the price isn't known (e.g. a model missing from the price table). */
+    costMicros: bigint("cost_micros", { mode: "number" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("report_usage_report_idx").on(t.reportId), index("report_usage_created_idx").on(t.createdAt)],
 );
 
 /** Dedupe ledger for webhook events the app handles itself (e.g. Stripe onEvent). */

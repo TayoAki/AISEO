@@ -42,7 +42,7 @@ const envSchema = z
     /** `fake` simulates Bright Data and Claude locally; refused in production. */
     PROVIDER_MODE: z.enum(["live", "fake"]).optional(),
     ANTHROPIC_API_KEY: z.string().optional(),
-    ANTHROPIC_MODEL: z.string().default("claude-opus-5-5"),
+    ANTHROPIC_MODEL: z.string().default("claude-sonnet-5-5"),
     ANTHROPIC_EFFORT: z.enum(["low", "medium", "high", "xhigh", "max"]).default("medium"),
     /** Server-side refusal fallback (Claude API only). */
     ANTHROPIC_REFUSAL_FALLBACK: boolish.default(true),
@@ -53,6 +53,8 @@ const envSchema = z
     BRIGHTDATA_DATASET_GEMINI: z.string().default("gd_mbz66arm2mf9cu856y"),
     /** Let ChatGPT browse so answers carry citations (visibility scoring needs them). */
     BRIGHTDATA_CHATGPT_WEB_SEARCH: boolish.default(true),
+    /** Your Bright Data price per 1,000 records, used only for cost reporting ($1.50 pay-as-you-go). */
+    BRIGHTDATA_COST_PER_1K_RECORDS: z.coerce.number().min(0).default(1.5),
 
     /** HMAC key for webhook URL tokens (Bright Data deliveries). */
     WEBHOOK_SIGNING_SECRET: z.string().min(32).default(DEV_SECRET),

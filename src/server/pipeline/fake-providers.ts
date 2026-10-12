@@ -155,6 +155,16 @@ export class FakeLlm implements StructuredLlm {
           : {}),
       };
     }
+    // Rough token counts under a model name with no price: exercises cost recording at $0.
+    await request.onUsage?.([
+      {
+        model: "fake",
+        inputTokens: Math.ceil((request.system.length + request.prompt.length) / 4),
+        outputTokens: Math.ceil(JSON.stringify(output).length / 4),
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+      },
+    ]);
     return request.schema.parse(output);
   }
 }

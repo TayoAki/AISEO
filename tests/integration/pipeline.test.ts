@@ -5,9 +5,10 @@ import type { PgBoss } from "pg-boss";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { freeEntitlements, type Entitlements } from "@/server/billing/entitlements";
-import { report, reportCollection, usageBucket } from "@/server/db/schema";
+import { report, reportCollection, reportUsage, usageBucket } from "@/server/db/schema";
 import { getEnv } from "@/server/env";
 import { createBoss } from "@/server/pipeline/boss";
+import { reportCostUsd } from "@/server/pipeline/costs";
 import { NonRetryableError } from "@/server/pipeline/errors";
 import { FakeCollectionProvider, FakeLlm } from "@/server/pipeline/fake-providers";
 import {
@@ -41,7 +42,11 @@ beforeAll(async () => {
   deps = {
     db,
     boss,
-    providers: { collections: new FakeCollectionProvider({ notify: false, delayMs: 0 }), llm: new FakeLlm() },
+    providers: {
+      collections: new FakeCollectionProvider({ notify: false, delayMs: 0 }),
+      llm: new FakeLlm(),
+      costPerRecordUsd: 0.0015,
+    },
     env: getEnv(),
   };
 });
@@ -162,6 +167,16 @@ describe("keyword pipeline", () => {
     expect(row).toMatchObject({ status: "completed", progress: 100, quotaState: "committed", resultVersion: 1 });
     expect(row.result).not.toHaveProperty("insights");
     expect(await bucketFor(reportId)).toMatchObject({ used: 1, reserved: 0 });
+
+    // What the report cost: one Bright Data download (3 records) and one model call.
+    const usage = await db.select().from(reportUsage).where(eq(reportUsage.reportId, reportId));
+    expect(usage.find((u) => u.provider === "brightdata")).toMatchObject({
+      task: "collect:perplexity",
+      records: 3,
+      costMicros: 4500,
+    });
+    expect(usage.find((u) => u.provider === "anthropic")).toMatchObject({ task: "keyword-analysis", model: "fake" });
+    expect(await reportCostUsd(db, reportId)).toBeCloseTo(0.0045);
   });
 });
 
@@ -293,7 +308,7 @@ class ScriptedProvider extends FakeCollectionProvider {
 
 describe("pipeline robustness", () => {
   function scriptedDeps(provider: ScriptedProvider, llm = new FakeLlm()): PipelineDeps {
-    return { ...deps, providers: { collections: provider, llm } };
+    return { ...deps, providers: { collections: provider, llm, costPerRecordUsd: 0.0015 } };
   }
 
   it("never moves a report's status backwards", async () => {
@@ -375,6 +390,31 @@ describe("pipeline robustness", () => {
       .where(eq(report.id, reportId));
     await handleReconcile(deps);
     expect(await reportRow(reportId)).toMatchObject({ status: "failed", errorCode: "TIMED_OUT", quotaState: "released" });
+  });
+
+  it("records a snapshot's Bright Data cost once when analysis is retried", async () => {
+    const user = await createTestUser(db);
+    const reportId = await newReport(user.id, { type: "keyword", keyword: "retried analysis", country: "US" });
+    const llm = new FakeLlm();
+    const generate = llm.generate.bind(llm);
+    let calls = 0;
+    llm.generate = (async (request: Parameters<FakeLlm["generate"]>[0]) => {
+      calls += 1;
+      if (calls === 1) throw new Error("Claude 529 overloaded");
+      return generate(request);
+    }) as FakeLlm["generate"];
+    const flaky: PipelineDeps = { ...deps, providers: { ...deps.providers, llm } };
+
+    await handleStart(flaky, { reportId });
+    await handleCollect(flaky, { reportId });
+    const analyze = () => runReportJob(flaky, "analyze", reportId, () => handleAnalyze(flaky, { reportId }));
+    await expect(analyze()).rejects.toThrow("529");
+    await analyze();
+
+    expect((await reportRow(reportId)).status).toBe("completed");
+    const usage = await db.select().from(reportUsage).where(eq(reportUsage.reportId, reportId));
+    expect(usage.filter((u) => u.provider === "brightdata")).toHaveLength(1);
+    expect(await reportCostUsd(db, reportId)).toBeCloseTo(0.0045);
   });
 
   it("keeps the collect queue out of the dead-letter path", async () => {

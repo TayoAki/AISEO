@@ -2,6 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { betaZodOutputFormat } from "@anthropic-ai/sdk/helpers/beta/zod";
 import type { z } from "zod";
 
+import { usageFromMessage, type LlmUsage } from "./costs";
 import { NonRetryableError } from "./errors";
 
 export type LlmTask = "visibility-prompts" | "keyword-analysis" | "visibility-analysis";
@@ -16,6 +17,8 @@ export type StructuredRequest<S extends z.ZodType> = {
   timeoutMs?: number;
   /** Structured hints for the fake provider; ignored by the live client. */
   fakeContext?: Record<string, unknown>;
+  /** Receives the billed attempts of every response, including refused or truncated ones. */
+  onUsage?: (attempts: LlmUsage[]) => Promise<void>;
 };
 
 export interface StructuredLlm {
@@ -51,17 +54,17 @@ export class AnthropicLlm implements StructuredLlm {
     try {
       message = await this.client.beta.messages.parse(
         {
-        model: this.options.model,
-        max_tokens: request.maxTokens ?? 16_000,
-        ...(this.options.refusalFallback
-          ? { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" as const }
-          : {}),
-        output_config: {
-          effort: this.options.effort,
-          format: betaZodOutputFormat(request.schema),
-        },
-        system: [{ type: "text", text: request.system, cache_control: { type: "ephemeral" } }],
-        messages: [{ role: "user", content: request.prompt }],
+          model: this.options.model,
+          max_tokens: request.maxTokens ?? 16_000,
+          ...(this.options.refusalFallback
+            ? { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" as const }
+            : {}),
+          output_config: {
+            effort: this.options.effort,
+            format: betaZodOutputFormat(request.schema),
+          },
+          system: [{ type: "text", text: request.system, cache_control: { type: "ephemeral" } }],
+          messages: [{ role: "user", content: request.prompt }],
         },
         { timeout: request.timeoutMs ?? 4 * 60 * 1000 },
       );
@@ -80,6 +83,9 @@ export class AnthropicLlm implements StructuredLlm {
       // retries with backoff.
       throw error;
     }
+
+    // Every response is billed, whatever its outcome: report usage before judging it.
+    await request.onUsage?.(usageFromMessage(message));
 
     if (message.stop_reason === "refusal") {
       const category = message.stop_details?.category ?? "unspecified";

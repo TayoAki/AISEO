@@ -77,10 +77,12 @@ export default defineRailway((ctx) => {
     env: {
       ...common,
       ANTHROPIC_API_KEY: preserve(),
-      // Switch to "claude-sonnet-5-5" to lower analysis cost.
-      ANTHROPIC_MODEL: "claude-opus-5-5",
+      // Sonnet 5.5 costs about half of Opus 5.5 per report ("claude-opus-5-5" for maximum depth).
+      ANTHROPIC_MODEL: "claude-sonnet-5-5",
       ANTHROPIC_EFFORT: "medium",
       BRIGHTDATA_API_TOKEN: preserve(),
+      // Your Bright Data rate, for cost reporting only (report_usage).
+      BRIGHTDATA_COST_PER_1K_RECORDS: "1.5",
       WORKER_CONCURRENCY: production ? "4" : "2",
     },
   });
