@@ -182,7 +182,7 @@ sequenceDiagram
   participant W as Web (Better Auth)
   participant E as Email
   U->>W: POST /api/auth/request-password-reset (email + Turnstile)
-  W->>E: Reset link (only if the account exists; expires in 1 h)
+  W->>E: Reset link (only if the account exists, expires in 1 h)
   W-->>U: Same "check your inbox" message either way
   U->>W: GET /api/auth/reset-password/:token
   alt token valid
@@ -218,9 +218,9 @@ sequenceDiagram
   B->>API: { input, idempotencyKey, turnstileToken (free plan only) }
   API->>API: Session + verified email, validate input
   API->>API: Free plan: verify Turnstile
-  API->>DB: BEGIN; per-user advisory lock; idempotency check;<br/>active-report cap; reserve 1 credit; insert report (queued)
+  API->>DB: BEGIN, per-user advisory lock, idempotency check,<br/>active-report cap, reserve 1 credit, insert report (queued)
   API->>Q: report.start job in the SAME transaction
-  API->>DB: NOTIFY; COMMIT
+  API->>DB: NOTIFY, COMMIT
   API-->>B: 202 { report }, navigate to /reports/:id
   Q->>WK: report.start
   WK->>DB: collecting 10% "Asking Perplexity about your keyword"
@@ -237,7 +237,7 @@ sequenceDiagram
   WK->>BD: Download rows (error rows counted, excluded)
   WK->>DB: analyzing 75% "Analyzing the evidence"
   WK->>AI: Structured analysis (schema-validated)
-  WK->>DB: analyzing 90%; then completed 100% + commit credit (one transaction)
+  WK->>DB: analyzing 90%, then completed 100% + commit credit (one transaction)
   DB-->>B: NOTIFY, SSE "done", page refreshes with the result
 ```
 
@@ -335,7 +335,7 @@ sequenceDiagram
 
   U->>B: Choose Pro or Plus, monthly or annual
   B->>W: authClient.subscription.upgrade({ plan, annual, successUrl, cancelUrl })
-  W->>W: Requires a verified email; reference must be the user
+  W->>W: Requires a verified email, reference must be the user
   W->>S: Create customer (first time) + Checkout Session
   W-->>B: { url } and the browser redirects to Stripe Checkout
   U->>S: Pays
@@ -450,7 +450,7 @@ sequenceDiagram
   participant L as Web: shared LISTEN connection
   participant S as SSE stream (per tab)
   participant B as Browser
-  WK->>DB: UPDATE report ... ; pg_notify('report_updates', id) (delivered on commit)
+  WK->>DB: UPDATE report, then pg_notify('report_updates', id) (delivered on commit)
   DB-->>L: NOTIFY id
   L-->>S: wake subscribers of id
   S->>DB: SELECT progress columns (owner-scoped)
