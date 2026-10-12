@@ -60,11 +60,13 @@ export class FakeCollectionProvider implements CollectionProvider {
     const brand = snapshot?.args.fakeContext?.brand;
     const website = snapshot?.args.fakeContext?.website;
     const host = website ? new URL(website).hostname : undefined;
+    // Include "simulate failure" in a keyword or topic to exercise the refund path locally.
+    const failAll = inputs.some((input) => /simulate failure/i.test(String(input.prompt ?? "")));
 
     return inputs.map((input, index) => {
       const prompt = String(input.prompt ?? "question");
       // One deterministic error row per collection exercises error handling.
-      if (index === inputs.length - 1 && inputs.length > 3) {
+      if (failAll || (index === inputs.length - 1 && inputs.length > 3)) {
         return { prompt, error: "Answer could not be collected", error_code: "dead_page" };
       }
       const competitor = COMPETITORS[index % COMPETITORS.length]!;

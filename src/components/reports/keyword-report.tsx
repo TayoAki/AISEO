@@ -1,4 +1,5 @@
 import { Badge } from "@/components/ui";
+import { plural } from "@/lib/utils";
 import type { KeywordResult } from "@/server/reports/results";
 import type { ReportDTO } from "@/server/reports/serialize";
 
@@ -35,10 +36,12 @@ export function KeywordReport({ result, insights }: { result: KeywordResult; ins
       </ScoreCard>
 
       <p className="text-xs text-muted-foreground">
-        Based on {coverage.answers} AI answers citing {coverage.sources} sources across {coverage.uniqueDomains}{" "}
-        domains
-        {coverage.errorRows > 0 ? ` (${coverage.errorRows} answers couldn't be collected and were excluded)` : ""}.
-        Scores are directional, not search volume.
+        Based on {plural(coverage.answers, "AI answer")} citing {plural(coverage.sources, "source")} across{" "}
+        {plural(coverage.uniqueDomains, "domain")}
+        {coverage.errorRows > 0
+          ? ` (${plural(coverage.errorRows, "answer")} couldn't be collected and ${coverage.errorRows === 1 ? "was" : "were"} excluded)`
+          : ""}
+        . Scores are directional, not search volume.
       </p>
 
       <div className="grid gap-6 lg:grid-cols-2">
@@ -96,8 +99,8 @@ export function KeywordReport({ result, insights }: { result: KeywordResult; ins
                   <Badge tone={STRENGTH_TONE[competitor.strength]}>{competitor.strength}</Badge>
                 </div>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  {competitor.domain ?? "No website identified"} · {competitor.mentions} mentions · {competitor.share}%
-                  share
+                  {competitor.domain ?? "No website identified"} · {plural(competitor.mentions, "mention")} ·{" "}
+                  {competitor.share}% share
                 </p>
               </li>
             ))}

@@ -6,7 +6,7 @@ import { KeywordReport } from "@/components/reports/keyword-report";
 import { LiveProgress } from "@/components/reports/live-progress";
 import { isActiveStatus, REPORT_TYPE_LABEL, StatusBadge } from "@/components/reports/meta";
 import { VisibilityReport } from "@/components/reports/visibility-report";
-import { Alert, ButtonLink, Card } from "@/components/ui";
+import { Alert, Badge, ButtonLink, Card } from "@/components/ui";
 import { countryName, hostnameOf, type ReportInput } from "@/lib/report-input";
 import { formatDate } from "@/lib/utils";
 import { getDb } from "@/server/db/client";
@@ -46,7 +46,7 @@ function FailureCard({ report }: { report: ReportDTO }) {
   return (
     <Card className="flex flex-col items-start gap-4">
       <Alert tone="danger" title="This report couldn't be completed">
-        {report.error?.message ?? "Something went wrong."} Your credit has been refunded.
+        {report.error?.message ?? "Something went wrong. Your credit has been refunded."}
       </Alert>
       <ButtonLink href={retryHref(report.input)}>Try again</ButtonLink>
     </Card>
@@ -70,7 +70,8 @@ export default async function ReportPage({ params }: { params: Promise<{ id: str
         </Link>
         <div className="flex flex-wrap items-center gap-3">
           <h1 className="text-2xl font-semibold tracking-tight">{report.title}</h1>
-          <StatusBadge status={report.status} />
+          {/* While running, the live card below carries the up-to-date status. */}
+          {isActiveStatus(report.status) ? <Badge tone="info">In progress</Badge> : <StatusBadge status={report.status} />}
         </div>
         <p className="text-sm text-muted-foreground">
           {REPORT_TYPE_LABEL[report.type]}

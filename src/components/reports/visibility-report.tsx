@@ -1,4 +1,5 @@
 import { Badge } from "@/components/ui";
+import { plural } from "@/lib/utils";
 import type { VisibilityPlatform, VisibilityResult } from "@/server/reports/results";
 import type { ReportDTO } from "@/server/reports/serialize";
 
@@ -36,8 +37,9 @@ export function VisibilityReport({
                 <Badge tone={scoreTone(platform.score)}>{platform.score}/100</Badge>
               </div>
               <p className="mt-2 text-xs text-muted-foreground">
-                Mentioned in {platform.mentions} of {platform.answered} answers · cited {platform.citations} times
-                {platform.failed > 0 ? ` · ${platform.failed} answers unavailable` : ""}
+                Mentioned in {platform.mentions} of {plural(platform.answered, "answer")} · cited{" "}
+                {plural(platform.citations, "time")}
+                {platform.failed > 0 ? ` · ${plural(platform.failed, "answer")} unavailable` : ""}
               </p>
             </div>
           ))}
@@ -92,7 +94,7 @@ export function VisibilityReport({
               <li key={index} className="rounded-lg border border-border p-3">
                 <p className="font-medium">{competitor.name}</p>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  {competitor.domain ?? "No website identified"} · {competitor.mentions} mentions on{" "}
+                  {competitor.domain ?? "No website identified"} · {plural(competitor.mentions, "mention")} on{" "}
                   {competitor.platforms.map((p) => PLATFORM_NAME[p]).join(" and ")}
                 </p>
               </li>
