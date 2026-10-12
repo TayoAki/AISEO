@@ -211,7 +211,7 @@ Supabase is the most mature option here and has the lowest data lock-in. It is p
 ## Convex (Oct 2026): reactive DB and realtime, actions and scheduling, Workflow/Workpool, Better Auth, Stripe/Polar, pricing, self-hosting, MCP and agent tooling, lock-in
 
 ### Takeaway
-Convex is the closest built-in match to RankSEO's hardest requirement: a durable job that waits minutes on a third-party webhook while streaming progress. The Workflow component's `step.awaitEvent` plus `sendEvent` can be fired from an HTTP action that receives the Bright Data webhook. Workflows "survive server restarts", and reactive queries give live progress without extra plumbing. Mutations are transactions, which makes atomic quotas natural, and there are official Stripe, Polar, Rate Limiter and Better Auth components. The costs:
+Convex is the closest built-in match to RankSEO's hardest requirement: a durable job that waits minutes on a third-party webhook while streaming progress. The Workflow component's `step.awaitEvent` plus `sendEvent` can be fired from an HTTP action that receives the Bright Data webhook. Workflows "survive server restarts", and reactive queries give live progress without extra plumbing. Mutations are transactions, which makes atomic quotas natural. Stripe, Polar, Rate Limiter and Better Auth components are listed in Convex's component directory; the Polar component's source lives in a contributor's repo. The costs:
 - Higher lock-in: a document model, Convex-specific APIs, and a self-host licence that is FSL rather than OSI open source.
 - Per-developer Pro pricing ($25/dev/month).
 - Workflow determinism and size limits that need deploy discipline.
@@ -345,7 +345,7 @@ Convex is the closest built-in match to RankSEO's hardest requirement: a durable
 
 #### Company and incidents
 - $57M Series B on 2026-08-04, led by Insight Partners with a16z, Spark Capital and Etna Labs. Total funding is $110.5M. Funds go to core product, "agentic development tooling" and hiring. — [Dealroom](https://dealroom.co/news/142974-convex-raises-57m-series-b-for-its-ai-optimised-app-backend/); [VCA Online](https://www.vcaonline.com/news/2026080405/convex-raises-57m-series-b-led-by-insight-partners-to-scale-the-reliable-backend-for-the-ai-era/); [Pulse 2.0](https://pulse2.com/convex-raises-57-million-series-b-bringing-total-funding-to-110-5-million/amp/)
-- One source claims "nearly 2 million applications" with customers including OpenAI and Zapier. These are press-release claims. — [VCA Online](https://www.vcaonline.com/news/2026080405/convex-raises-57m-series-b-led-by-insight-partners-to-scale-the-reliable-backend-for-the-ai-era/)
+- One of the funding-coverage sources claims Convex powers "nearly 2 million applications", with customers including OpenAI and Zapier. These are press-release claims, and I did not confirm which outlet carried them. — [Dealroom](https://dealroom.co/news/142974-convex-raises-57m-series-b-for-its-ai-optimised-app-backend/); [VCA Online](https://www.vcaonline.com/news/2026080405/convex-raises-57m-series-b-led-by-insight-partners-to-scale-the-reliable-backend-for-the-ai-era/) (search-derived)
 - 2026 incidents, mirrored by Pingoru from Convex's status page (I could not map each incident to its page; nothing found after 2026-06-15):
   - 2026-05-08: AWS availability-zone problem, about 1h49m.
   - 2026-05-22: a change broke HTTP actions for some deployments for nearly 4 hours (postmortem promised).
@@ -426,7 +426,8 @@ None is a better fit than Supabase or Convex for RankSEO.
   - Event-driven and 1st-gen functions: 540 s.
   - 2nd-gen memory goes up to 32 GiB.
   — [Firebase docs: Quotas and limits](https://firebase.google.com/docs/functions/quotas) ("Last updated 2026-10-08")
-- Data Connect (managed Postgres via Cloud SQL, accessed through GraphQL) went GA on 2025-04-09. On 2026-04-29 it became **Firebase SQL Connect**, adding realtime query subscriptions through a new `@refresh` directive, raw SQL and offline caching. No-cost trials started on 2026-03-12. — [Firebase blog: From Data Connect to SQL Connect](https://firebase.blog/posts/2026/04/whats-new-sql-connect); [Firebase blog SQL Connect index](https://firebase.blog/category/sql-connect)
+- Data Connect (managed Postgres via Cloud SQL, accessed through GraphQL) went GA on 2025-04-09. No-cost trials started on 2026-03-12. — [Firebase blog SQL Connect index](https://firebase.blog/category/sql-connect) (fetched 2026-10-12)
+- On 2026-04-29 (Cloud Next 2026) it became **Firebase SQL Connect**, described as the same architecture with a renewed Postgres focus. The rename adds realtime query subscriptions through a new `@refresh` directive (interval-based or bound to mutations via CEL), raw SQL alongside GraphQL, and offline caching. — [Firebase blog: From Data Connect to SQL Connect](https://firebase.blog/posts/2026/04/whats-new-sql-connect) (search-derived)
 - The Firebase MCP server launched in May 2025 as "experimental" and covers Firestore and Data Connect. **[>12 mo, possibly stale]**; the current status is unverified. — [Firebase blog: MCP server](https://firebase.blog/posts/2025/05/firebase-mcp-server/); [Firebase docs: MCP server](https://firebase.google.cn/docs/cli/mcp-server?hl=en)
 - Firebase Studio sunset:
   - Announced 2026-03-19.
@@ -476,8 +477,8 @@ On maturity the order is clear: Supabase (2020, $10.5B, >9M devs) ≫ Convex ($1
   - Tokens per run: 8.2M vs 10.4M vs 11.6M.
   - Time: about 150 s vs more than 200 s.
   - No server versions, configs or harness are given.
-  - Headlines such as "1.6x faster" and "up to 70% higher" are not cleanly derivable from the stated averages: 150 s vs ">200 s" implies roughly 1.33× or more.
   — [InsForge blog (CTO Tony Chang)](https://insforge.dev/blog/mcpmark-benchmark-results)
+- My own arithmetic on the post's figures: the headlines "1.6x faster", "~30% fewer tokens" and "up to 70% higher Pass⁴" do not all follow cleanly. 150 s vs ">200 s" supports at least 1.33×. 8.2M vs 11.6M tokens is about 29% fewer than Supabase but about 21% fewer than Postgres MCP. 47.6% vs 28.6% is about 66% higher. — derived from [InsForge blog](https://insforge.dev/blog/mcpmark-benchmark-results)
 - **v2, 2026-03-02 (Sonnet 4.6), InsForge vs Supabase MCP only:**
 
   | Metric | InsForge | Supabase MCP |
@@ -585,7 +586,7 @@ The composed stack's best-documented win is owning auth and sessions in your own
 - **Support:** Supabase's free-plan auto-reply says there is "no guaranteed support response" (October 2025 anecdote). — [HN](https://news.ycombinator.com/item?id=45609621)
 - **Vendor incidents in 2026:**
   - Supabase: regional database and compute failures of 1–4 hours (February, March, June and September 2026). — [Pingoru](https://pingoru.io/providers/supabase/outage-history)
-  - Convex: a cluster in May–June 2026, including a nearly 4-hour HTTP-actions breakage on 2026-05-22. — [Pingoru Convex incident](https://pingoru.io/providers/convex/incidents/2903369)
+  - Convex: a cluster in May–June 2026, including a nearly 4-hour HTTP-actions breakage on 2026-05-22. — [Pingoru Convex incident pages (individual page-to-incident mapping unverified)](https://pingoru.io/providers/convex/incidents/2903369)
   - Both come from third-party mirrors.
 
 #### Composed-stack building blocks with practitioner traction
