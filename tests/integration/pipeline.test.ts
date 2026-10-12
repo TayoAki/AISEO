@@ -1,0 +1,249 @@
+import { randomUUID } from "node:crypto";
+
+import { and, eq, sql } from "drizzle-orm";
+import type { PgBoss } from "pg-boss";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+
+import { freeEntitlements, type Entitlements } from "@/server/billing/entitlements";
+import { report, reportCollection, usageBucket } from "@/server/db/schema";
+import { getEnv } from "@/server/env";
+import { createBoss } from "@/server/pipeline/boss";
+import { NonRetryableError } from "@/server/pipeline/errors";
+import { FakeCollectionProvider, FakeLlm } from "@/server/pipeline/fake-providers";
+import {
+  handleAnalyze,
+  handleCollect,
+  handleReconcile,
+  handleStart,
+  runReportJob,
+  type PipelineDeps,
+} from "@/server/pipeline/jobs";
+import { QUEUES } from "@/server/pipeline/queues";
+import { handleCollectionCallback } from "@/server/pipeline/webhook-handler";
+import { collectionWebhookUrl } from "@/server/pipeline/webhook-token";
+import { createReport } from "@/server/reports/create";
+import { completeReport, failReport } from "@/server/reports/state";
+
+import { createTestUser, openTestDatabase, resetTestDatabase, TEST_DATABASE_URL } from "../helpers/db";
+
+const handles = openTestDatabase(10);
+const db = handles.db;
+let boss: PgBoss;
+let deps: PipelineDeps;
+
+const pro: Entitlements = { plan: "pro", isPaid: true, insights: true, subscription: null };
+
+beforeAll(async () => {
+  await resetTestDatabase();
+  boss = createBoss("migrate", TEST_DATABASE_URL);
+  await boss.start();
+  deps = {
+    db,
+    boss,
+    providers: { collections: new FakeCollectionProvider({ notify: false, delayMs: 0 }), llm: new FakeLlm() },
+    env: getEnv(),
+  };
+});
+
+afterAll(async () => {
+  await boss.stop({ graceful: false, close: true });
+  await handles.pool.end();
+});
+
+async function jobsFor(reportId: string) {
+  const result = await db.execute<{ name: string; state: string }>(
+    sql`select name, state from pgboss.job where data->>'reportId' = ${reportId} order by created_on`,
+  );
+  return result.rows;
+}
+
+async function reportRow(id: string) {
+  const [row] = await db.select().from(report).where(eq(report.id, id));
+  return row!;
+}
+
+async function bucketFor(reportId: string) {
+  const row = await reportRow(reportId);
+  const [bucket] = await db.select().from(usageBucket).where(eq(usageBucket.id, row.usageBucketId));
+  return bucket!;
+}
+
+async function newReport(userId: string, input: Parameters<typeof createReport>[1]["input"], entitlements = freeEntitlements()) {
+  const result = await createReport(
+    { db, boss },
+    { userId, input, idempotencyKey: randomUUID(), entitlements, now: new Date(), maxActiveReports: 3 },
+  );
+  if (result.status !== "created") throw new Error(`expected created, got ${result.status}`);
+  return result.reportId;
+}
+
+describe("createReport", () => {
+  it("reserves quota, creates the report and enqueues its start job in one transaction", async () => {
+    const user = await createTestUser(db);
+    const reportId = await newReport(user.id, { type: "keyword", keyword: "crm software", country: "US" });
+    const row = await reportRow(reportId);
+    expect(row).toMatchObject({ status: "queued", quotaState: "reserved", tier: "free", title: "crm software" });
+    expect(await bucketFor(reportId)).toMatchObject({ reserved: 1, used: 0, quota: 2 });
+    expect((await jobsFor(reportId)).map((j) => j.name)).toEqual([QUEUES.start]);
+  });
+
+  it("returns the existing report for a repeated idempotency key without reserving twice", async () => {
+    const user = await createTestUser(db);
+    const args = {
+      userId: user.id,
+      input: { type: "keyword" as const, keyword: "running shoes", country: "GB" as const },
+      idempotencyKey: "same-key",
+      entitlements: freeEntitlements(),
+      now: new Date(),
+      maxActiveReports: 3,
+    };
+    const first = await createReport({ db, boss }, args);
+    const second = await createReport({ db, boss }, args);
+    expect(second).toEqual({ status: "duplicate", reportId: first.status === "created" ? first.reportId : "" });
+    expect((await bucketFor(second.status === "duplicate" ? second.reportId : "")).reserved).toBe(1);
+  });
+
+  it("enforces the plan allowance and the active-report cap", async () => {
+    const user = await createTestUser(db);
+    const input = { type: "visibility" as const, website: "https://acme.example", brand: "Acme", topic: "crm tools" };
+    const common = { userId: user.id, input, entitlements: freeEntitlements(), now: new Date() };
+    const capped = await Promise.all(
+      Array.from({ length: 4 }, () => createReport({ db, boss }, { ...common, idempotencyKey: randomUUID(), maxActiveReports: 10 })),
+    );
+    expect(capped.filter((r) => r.status === "created")).toHaveLength(2);
+    expect(capped.filter((r) => r.status === "limit_reached")).toHaveLength(2);
+
+    const other = await createTestUser(db);
+    await createReport({ db, boss }, { ...common, userId: other.id, idempotencyKey: randomUUID(), maxActiveReports: 1 });
+    const blocked = await createReport({ db, boss }, { ...common, userId: other.id, idempotencyKey: randomUUID(), maxActiveReports: 1 });
+    expect(blocked).toEqual({ status: "too_many_active", limit: 1 });
+  });
+});
+
+describe("keyword pipeline", () => {
+  it("runs start -> webhook -> collect -> analyze and commits the credit", async () => {
+    const user = await createTestUser(db);
+    const reportId = await newReport(user.id, { type: "keyword", keyword: "project management software", country: "US" });
+
+    await runReportJob(deps, "start", reportId, () => handleStart(deps, { reportId }));
+    let row = await reportRow(reportId);
+    expect(row.status).toBe("collecting");
+    const [collection] = await db.select().from(reportCollection).where(eq(reportCollection.reportId, reportId));
+    expect(collection).toMatchObject({ platform: "perplexity", status: "triggered" });
+    expect((await jobsFor(reportId)).map((j) => j.name)).toContain(QUEUES.timeout);
+
+    // Webhook with a forged token is rejected; the real one queues a collect job.
+    const token = new URL(collectionWebhookUrl(deps.env.APP_URL, collection!.id, deps.env.WEBHOOK_SIGNING_SECRET)).searchParams.get("token");
+    const signingSecret = deps.env.WEBHOOK_SIGNING_SECRET;
+    expect(await handleCollectionCallback({ db, boss, signingSecret }, { collectionId: collection!.id, token: "forged" })).toBe("unauthorized");
+    expect(await handleCollectionCallback({ db, boss, signingSecret }, { collectionId: collection!.id, token })).toBe("accepted");
+    expect(await handleCollectionCallback({ db, boss, signingSecret }, { collectionId: collection!.id, token })).toBe("accepted");
+    expect((await jobsFor(reportId)).filter((j) => j.name === QUEUES.collect)).toHaveLength(1);
+
+    await runReportJob(deps, "collect", reportId, () => handleCollect(deps, { reportId }));
+    expect((await jobsFor(reportId)).map((j) => j.name)).toContain(QUEUES.analyze);
+
+    await runReportJob(deps, "analyze", reportId, () => handleAnalyze(deps, { reportId }));
+    row = await reportRow(reportId);
+    expect(row).toMatchObject({ status: "completed", progress: 100, quotaState: "committed", resultVersion: 1 });
+    expect(row.result).not.toHaveProperty("insights");
+    expect(await bucketFor(reportId)).toMatchObject({ used: 1, reserved: 0 });
+  });
+});
+
+describe("visibility pipeline", () => {
+  it("persists prompts before scraping and generates paid sections for paid plans", async () => {
+    const user = await createTestUser(db);
+    const reportId = await newReport(
+      user.id,
+      { type: "visibility", website: "https://acme.example", brand: "Acme", topic: "help desk software" },
+      pro,
+    );
+
+    await runReportJob(deps, "start", reportId, () => handleStart(deps, { reportId }));
+    const afterStart = await reportRow(reportId);
+    expect(afterStart.prompts).toHaveLength(5);
+    const collections = await db.select().from(reportCollection).where(eq(reportCollection.reportId, reportId));
+    expect(collections.map((c) => c.platform).sort()).toEqual(["chatgpt", "gemini"]);
+
+    // A retried start must not regenerate prompts or re-trigger collections.
+    await runReportJob(deps, "start", reportId, () => handleStart(deps, { reportId }));
+    expect((await reportRow(reportId)).prompts).toEqual(afterStart.prompts);
+    const again = await db.select().from(reportCollection).where(eq(reportCollection.reportId, reportId));
+    expect(again.map((c) => c.snapshotId).sort()).toEqual(collections.map((c) => c.snapshotId).sort());
+
+    await runReportJob(deps, "collect", reportId, () => handleCollect(deps, { reportId }));
+    await runReportJob(deps, "analyze", reportId, () => handleAnalyze(deps, { reportId }));
+
+    const row = await reportRow(reportId);
+    expect(row.status).toBe("completed");
+    const result = row.result as { platforms: Array<{ answered: number; failed: number }>; recommendations?: unknown[] };
+    // The fake provider returns one error row per platform: excluded, not scored.
+    expect(result.platforms.every((p) => p.answered === 4 && p.failed === 1)).toBe(true);
+    expect(result.recommendations?.length).toBeGreaterThan(0);
+  });
+});
+
+describe("failure paths", () => {
+  it("refunds the credit when every collection fails", async () => {
+    const user = await createTestUser(db);
+    const reportId = await newReport(user.id, { type: "keyword", keyword: "blocked keyword", country: "US" });
+    await runReportJob(deps, "start", reportId, () => handleStart(deps, { reportId }));
+    await db.update(reportCollection).set({ status: "failed" }).where(eq(reportCollection.reportId, reportId));
+
+    await runReportJob(deps, "collect", reportId, () => handleCollect(deps, { reportId }));
+    const row = await reportRow(reportId);
+    expect(row).toMatchObject({ status: "failed", errorCode: "COLLECTION_FAILED", quotaState: "released" });
+    expect(row.errorMessage).toContain("refunded");
+    expect(await bucketFor(reportId)).toMatchObject({ used: 0, reserved: 0 });
+  });
+
+  it("fails immediately with a safe message on non-retryable errors", async () => {
+    const user = await createTestUser(db);
+    const reportId = await newReport(user.id, { type: "keyword", keyword: "declined", country: "US" });
+    await runReportJob(deps, "analyze", reportId, async () => {
+      throw new NonRetryableError("ANALYSIS_DECLINED", "category=general_harms");
+    });
+    const row = await reportRow(reportId);
+    expect(row).toMatchObject({ status: "failed", errorCode: "ANALYSIS_DECLINED", quotaState: "released" });
+    expect(row.errorMessage).not.toContain("general_harms");
+    expect(row.failureDetail).toContain("general_harms");
+  });
+
+  it("records retryable errors and rethrows so pg-boss retries", async () => {
+    const user = await createTestUser(db);
+    const reportId = await newReport(user.id, { type: "keyword", keyword: "flaky", country: "US" });
+    await expect(
+      runReportJob(deps, "start", reportId, async () => {
+        throw new Error("Bright Data 503");
+      }),
+    ).rejects.toThrow("503");
+    expect(await reportRow(reportId)).toMatchObject({ status: "queued", quotaState: "reserved" });
+    expect((await reportRow(reportId)).failureDetail).toContain("503");
+  });
+});
+
+describe("guarded transitions and reconciliation", () => {
+  it("never overwrites a finished report", async () => {
+    const user = await createTestUser(db);
+    const failed = await newReport(user.id, { type: "keyword", keyword: "late success", country: "US" });
+    expect(await failReport(db, failed, "TIMED_OUT", "test")).toBe(true);
+    expect(await completeReport(db, failed, {})).toBe(false);
+    expect(await reportRow(failed)).toMatchObject({ status: "failed", quotaState: "released" });
+
+    const user2 = await createTestUser(db);
+    const done = await newReport(user2.id, { type: "keyword", keyword: "late failure", country: "US" });
+    expect(await completeReport(db, done, { version: 1 })).toBe(true);
+    expect(await failReport(db, done, "INTERNAL", "late")).toBe(false);
+    expect(await reportRow(done)).toMatchObject({ status: "completed", quotaState: "committed" });
+  });
+
+  it("settles reservations left on finished reports", async () => {
+    const user = await createTestUser(db);
+    const reportId = await newReport(user.id, { type: "keyword", keyword: "orphan", country: "US" });
+    await db.update(report).set({ status: "failed" }).where(and(eq(report.id, reportId)));
+    await handleReconcile(deps);
+    expect(await reportRow(reportId)).toMatchObject({ quotaState: "released" });
+    expect(await bucketFor(reportId)).toMatchObject({ reserved: 0, used: 0 });
+  });
+});

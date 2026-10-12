@@ -64,7 +64,8 @@ export const QUEUE_DEFINITIONS: QueueDefinition[] = [
     retryDelay: 30,
     retryBackoff: true,
     retryDelayMax: 600,
-    expireInSeconds: 600,
+    // Covers several LLM calls (each capped at 4 min x 2 attempts by the client).
+    expireInSeconds: 900,
     deadLetter: QUEUES.failed,
   },
   {
