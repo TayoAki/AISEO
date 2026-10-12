@@ -52,7 +52,11 @@ function createAuth() {
       autoSignInAfterVerification: true,
       expiresIn: 60 * 60 * 24,
       sendVerificationEmail: async ({ user: account, url }) => {
-        await sendEmail(verificationEmail(account.email, account.name, url));
+        // Every verification link lands on /verify-email, which forwards verified
+        // users to the dashboard and explains expired or invalid links.
+        const link = new URL(url);
+        link.searchParams.set("callbackURL", "/verify-email");
+        await sendEmail(verificationEmail(account.email, account.name, link.toString()));
       },
     },
     user: {

@@ -1,0 +1,81 @@
+@import "tailwindcss";
+
+:root {
+  --background: #f6f8f7;
+  --foreground: #12201a;
+  --card: #ffffff;
+  --muted: #edf2ef;
+  --muted-foreground: #56685f;
+  --border: #dbe4df;
+  --primary: #0e7a4e;
+  --primary-hover: #0b6640;
+  --primary-foreground: #ffffff;
+  --accent: #e3f4ec;
+  --warning: #a35400;
+  --warning-soft: #fff4e5;
+  --destructive: #b42318;
+  --destructive-soft: #fdecea;
+  --success: #12753e;
+  --success-soft: #e7f6ee;
+  --ring: #0e7a4e;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0c1310;
+    --foreground: #e4eee8;
+    --card: #121b17;
+    --muted: #19241f;
+    --muted-foreground: #9db0a6;
+    --border: #25332c;
+    --primary: #3ccf91;
+    --primary-hover: #5ad9a3;
+    --primary-foreground: #04140c;
+    --accent: #15291f;
+    --warning: #f5a524;
+    --warning-soft: #2a1f0c;
+    --destructive: #f97066;
+    --destructive-soft: #2c1513;
+    --success: #4ade80;
+    --success-soft: #10241a;
+    --ring: #3ccf91;
+  }
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-primary: var(--primary);
+  --color-primary-hover: var(--primary-hover);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-accent: var(--accent);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --color-destructive: var(--destructive);
+  --color-destructive-soft: var(--destructive-soft);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-ring: var(--ring);
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+html {
+  color-scheme: light dark;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}

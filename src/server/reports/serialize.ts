@@ -8,7 +8,7 @@ import { reportInputSchema, type ReportInput } from "@/lib/report-input";
 
 import type { Entitlements } from "../billing/entitlements";
 import type { PlanId } from "../billing/plans";
-import type { ReportRow } from "./queries";
+import type { ReportProgressRow, ReportRow, ReportSummaryRow } from "./queries";
 import {
   keywordResultSchema,
   visibilityResultSchema,
@@ -93,7 +93,7 @@ export function serializeReport(row: ReportRow, viewer: Entitlements): ReportDTO
 /** Lightweight shape for live progress events. */
 export type ReportProgressDTO = Pick<ReportDTO, "id" | "status" | "progress" | "step" | "error">;
 
-export function serializeProgress(row: Pick<ReportRow, "id" | "status" | "progress" | "step" | "errorCode" | "errorMessage">): ReportProgressDTO {
+export function serializeProgress(row: ReportProgressRow): ReportProgressDTO {
   return {
     id: row.id,
     status: row.status,
@@ -103,5 +103,26 @@ export function serializeProgress(row: Pick<ReportRow, "id" | "status" | "progre
       row.status === "failed" || row.status === "canceled"
         ? { code: row.errorCode ?? "INTERNAL", message: row.errorMessage ?? "This report failed." }
         : null,
+  };
+}
+
+/** Row in report lists (dashboard, history): no result document, just the headline score. */
+export type ReportSummaryDTO = Pick<
+  ReportDTO,
+  "id" | "type" | "status" | "progress" | "step" | "title" | "createdAt" | "completedAt"
+> & { score: number | null; scoreLabel: string | null };
+
+export function serializeReportSummary(row: ReportSummaryRow): ReportSummaryDTO {
+  return {
+    id: row.id,
+    type: row.type,
+    status: row.status,
+    progress: row.progress,
+    step: row.step,
+    title: row.title,
+    createdAt: row.createdAt.toISOString(),
+    completedAt: row.completedAt?.toISOString() ?? null,
+    score: row.score,
+    scoreLabel: row.scoreLabel,
   };
 }
