@@ -158,8 +158,8 @@ What the user sees and what can go wrong:
 - **Invalid form input**: the client checks password length; Better Auth validates email format and password length (10–128).
 - **Security check not completed**: "Please complete the security check." The token is single-use, so the widget re-mounts after every failed attempt.
 - **Disposable email** (e.g. mailinator): "Please use a permanent email address." (`src/server/auth/email-policy.ts`, list from `disposable-email-domains`).
-- **Alias of an existing account**: `jane+1@gmail.com` or `j.a.n.e@gmail.com` when `jane@gmail.com` exists. The account is refused, so one inbox can't collect free credits repeatedly. Normalization strips `+tags` everywhere and dots for Gmail; the normalized email has a unique index.
-- **Email already registered**: Better Auth answers exactly as if the sign-up succeeded (and hashes the password anyway so timing matches). Nobody can probe which emails have accounts.
+- **Email already registered, or an alias of one**: `jane@gmail.com` again, or `jane+1@gmail.com` / `j.a.n.e@gmail.com` when `jane@gmail.com` exists. No account is created, so one inbox can't collect free credits repeatedly (normalization strips `+tags` everywhere and dots for Gmail, and the normalized email has a unique index). The response is identical to a successful sign-up (the password is hashed anyway so timing matches), so nobody can probe which emails have accounts. Instead, the inbox owner gets a "You already have an AISEO account" email with sign-in and password-reset links.
+- **Protected fields**: sign-up and profile updates reject `stripeCustomerId`, `emailVerified` and `normalizedEmail` in the request body (`src/server/auth/auth.ts`).
 - **Too many sign-ups from one IP**: HTTP 429 from the auth rate limiter (stored in the `rate_limit` table, so it works across instances).
 - **Verification link expired or reused**: Better Auth redirects to `/verify-email?error=TOKEN_EXPIRED` (or `INVALID_TOKEN`). The page explains the problem and offers a resend form (rate limited to 3 per 10 minutes per IP). All verification links land on `/verify-email` regardless of which flow sent them (`src/server/auth/auth.ts`). A verified, signed-in visitor there is forwarded to `/dashboard`.
 - **Opening the link on another device** works: verification signs that device in.
@@ -267,7 +267,7 @@ The user opens `/visibility` and enters a website (normalized to `https://host/p
 - `/reports/:id` for an active report shows a live card: spinner, current step, percentage bar and a note that the user can leave.
 - The card subscribes to `GET /api/reports/:id/events` (server-sent events). Each pipeline step writes the report row and sends `pg_notify('report_updates', id)`. Every web instance holds **one** `LISTEN` connection that fans notifications out to its open streams. A stream re-reads the row and sends a `progress` event only when something changed, in order.
 - When the report finishes, the stream sends `done` and the page refreshes into the finished report or the failure card.
-- **Resilience**: heartbeats every 20 s keep proxies from closing the stream. The server closes each stream after 13 minutes (Railway caps responses at 15) and the browser reconnects after 3 s, picking up the current state. If the stream fails more than four times in a row, or can't connect, the card falls back to polling `GET /api/reports/:id` every 5 seconds. If the `LISTEN` connection drops, it reconnects with backoff and wakes every open stream to re-read.
+- **Resilience**: heartbeats every 20 s keep proxies from closing the stream, and each heartbeat also re-reads the report, so a missed notification delays an update by at most 20 s. The `LISTEN` connection uses TCP keep-alive, so a half-open connection errors and reconnects instead of going silent. The server closes each stream after 13 minutes (Railway caps responses at 15) and the browser reconnects after 3 s, picking up the current state. If the stream fails more than four times in a row, or can't connect, the card falls back to polling `GET /api/reports/:id` every 5 seconds. If the `LISTEN` connection drops, it reconnects with backoff and wakes every open stream to re-read.
 - **Leaving** is safe: the pipeline doesn't depend on the browser. Reports appear in `/dashboard`, `/keywords` or `/visibility`, and `/reports` with their current status. Opening one later shows the live card or the result.
 
 ### J8. Read a finished report
@@ -278,10 +278,10 @@ The user opens `/visibility` and enters a website (normalized to `https://host/p
 
 | Viewer's plan | Report created on | Paid section shows |
 |---|---|---|
-| Free | Free | "Upgrade to unlock" (content never generated) |
+| Free | Free | "Included in every report you run on Pro or Plus" with a "See plans" link (upgrading can't add sections to this report) |
 | Free | Pro/Plus (user later downgraded) | "Upgrade to unlock" (content exists but is not sent) |
 | Pro/Plus | Pro/Plus | The insights |
-| Pro/Plus | Free (user upgraded later) | "This report ran on the Free plan, so this section wasn't generated. New reports include it." |
+| Pro/Plus | Free (user upgraded later) | "This report ran on the Free plan, so it doesn't include this section. New reports on your plan do." |
 
 - Stored results are validated against a versioned schema on every read. A result that fails validation is logged and the page says it can't be displayed rather than crashing.
 
@@ -310,6 +310,7 @@ To see the refund path locally (fake providers only), use a keyword or topic con
 |---|---|---|
 | Out of credits for that report type | 403 `LIMIT_REACHED` | Free: "You've used your free keyword reports. Upgrade to keep going." Paid: "…Upgrade or wait for your allowance to reset." Forms show an out-of-credits banner and disable the button. |
 | 3 reports already running | 429 `TOO_MANY_ACTIVE` | "You can run 3 reports at a time. Wait for one to finish and try again." (`MAX_ACTIVE_REPORTS_PER_USER`) |
+| 5 input-caused failures in 24 hours | 429 `TOO_MANY_FAILURES` | "Several of your recent reports couldn't be completed, so new reports are paused for up to 24 hours." Counts only refunded failures a user's input can cause after money was spent (`NO_USABLE_ANSWERS`, `ANALYSIS_DECLINED`, `PROMPTS_FAILED`); provider outages don't count. (`MAX_FAILED_REPORTS_PER_DAY`) |
 | Double-click, retry after a network error | 200 with the existing report | The same report opens; no second credit is used. The form keeps one idempotency key per submission attempt and resets it when the input changes. |
 | Free user without a valid Turnstile token | 403 `CAPTCHA_FAILED` | "Please complete the security check and try again." |
 | Invalid input | 400 `INVALID_INPUT` + field errors | Messages under each field (the same Zod schema runs in the browser and on the server). |
@@ -348,15 +349,16 @@ sequenceDiagram
 After paying:
 
 - The plan badge, dashboard and billing page show the new plan. If the page loads before Stripe's webhook arrives, the billing page says it may take a few seconds.
-- **The allowance switches immediately.** Paid credits come from a new bucket for the paid plan and the current monthly window, so an upgraded user gets the full monthly allowance at once. Free credits already used don't count against it.
-- **Monthly windows are anchored to the subscription start**, including on annual billing (an annual subscriber gets 12 monthly allowances, each resetting on the same day of the month; days past the end of a short month are clamped). Unused credits don't roll over.
+- **The allowance switches immediately.** Paid credits come from a new bucket for the paid plan and the current billing window, so an upgraded user gets the full monthly allowance at once. Free credits already used don't count against it.
+- **Allowances reset every billing month.** On monthly billing the window is exactly Stripe's billing period, so it resets on each renewal, including month-end anchors (Jan 31 → Feb 28 → Mar 31). On annual billing there are 12 monthly windows counted from the start of the billing year (days past the end of a short month are clamped), never running past the year's end. Unused credits don't roll over.
 - New reports are created with the paid tier, so they include insights.
 - Canceling Checkout returns to `/billing?checkout=canceled`: "Checkout was canceled. You haven't been charged."
 
 ### J13. Change plan, switch billing period, cancel
 
 - **Pro → Plus or Plus → Pro**: the Stripe plugin sends existing subscribers to the Stripe billing portal to confirm the change (with proration). The new plan's monthly allowance applies at once (it's a separate bucket per plan and window). If the user had already used some of the target plan's allowance earlier in the same window, that usage still counts.
-- **Monthly ↔ annual**: the same flow with the annual price. The billing page labels it "Switch to annual billing" or "Switch to monthly billing". The current combination shows a disabled "Current plan" button.
+- **Monthly ↔ annual**: the same flow with the annual price. The billing page labels it "Switch to annual billing" or "Switch to monthly billing". The current combination shows a disabled "Current plan" button. Stripe restarts the billing period on an interval change, but **the allowance doesn't restart**: the current window's bucket stays in use (extended to the new window's end), so toggling the interval can't mint extra credits.
+- **Past-due subscriptions** can't change plans: Stripe's plugin would open a second subscription in Checkout. The billing page hides plan changes and asks the user to update their payment method first.
 - **Manage billing** opens the Stripe billing portal (update card, see invoices, cancel).
 - **Cancel**: done in the portal. Stripe keeps the subscription active until the period ends (`cancelAtPeriodEnd`). The dashboard and billing page say "Your Pro plan ends on <date>". The user keeps paid access and their remaining credits until then, and can resume from the portal. When the period ends, Stripe sends `customer.subscription.deleted`, the subscription row is no longer active, and the user is on Free.
 - **After downgrading to Free**: the user is back on the free lifetime bucket (whatever remains of the original 2 + 2). Paid sections of old reports are hidden ("Upgrade to unlock") but not deleted.
@@ -364,8 +366,8 @@ After paying:
 ### J14. A payment fails
 
 1. Stripe fails to charge a renewal and marks the subscription `past_due`. **The user keeps paid access** while Stripe retries (Smart Retries / dunning, configured in Stripe).
-2. Our webhook handler (`src/server/billing/stripe-events.ts`) receives `invoice.payment_failed`, records the event id (Stripe may deliver events twice), and emails the user a link to `/billing`.
-3. In the app, the dashboard shows "Your last payment failed" with a link to billing. The billing page marks the plan "Payment failed" and its button reads **Update payment method** (Stripe portal).
+2. Our webhook handler (`src/server/billing/stripe-events.ts`) receives `invoice.payment_failed` and emails the user a link to `/billing`. The event id is recorded in the same transaction as the email: Stripe's duplicates are skipped, but if sending fails the record rolls back and Stripe's retry sends it.
+3. In the app, the dashboard shows "Your last payment failed" with a link to billing. The billing page marks the plan "Payment failed", its button reads **Update payment method** (Stripe portal), and plan changes are paused until the invoice is paid.
 4. If a retry succeeds, the status returns to `active` and nothing else changes. If retries are exhausted, Stripe cancels the subscription or marks it `unpaid` (depending on the Stripe settings), and the user drops to Free.
 
 ### J15. Account settings and signing out
@@ -403,7 +405,8 @@ All status changes go through `src/server/reports/state.ts`. Every write only ap
 - **Reserve** (`reserveUnit`): a single conditional `UPDATE … SET reserved = reserved + 1 WHERE used + reserved < quota`. Under concurrency, Postgres row locking re-checks the condition, so two parallel requests can never both take the last credit (tested with 25 concurrent reservations against a quota of 2).
 - **Create** (`createReport`): one transaction holds a per-user advisory lock and performs the idempotency check, the active-report cap, the reservation, the report insert and the pipeline job insert. It all commits or none of it does.
 - **Settle** (`settleReservation`): flips `report.quota_state` from `reserved` to `committed` or `released` with a guarded `UPDATE`, then adjusts the bucket. A second settle finds nothing to flip, so retries, timeouts and the reconciler can call it safely.
-- **Windows** (`src/server/quota/windows.ts`): free uses one lifetime window. Paid uses monthly windows anchored to `subscription.periodStart`, or the UTC calendar month if Stripe hasn't reported a period yet.
+- **Windows** (`src/server/quota/windows.ts`): free uses one lifetime window. Monthly billing uses Stripe's current period; annual billing uses monthly windows from the start of the billing year, capped at its end; with no period yet, the UTC calendar month. If a renewal webhook is late, the next window starts exactly at the old period's end, so it maps to the same bucket once the renewal arrives.
+- **Bucket reuse** (`ensureBucket`): a paid window reuses any bucket of the same plan that overlaps it (and extends its end) instead of opening a new one. Interval switches move Stripe's anchor, and this keeps the allowance from restarting mid-window.
 
 ### S3. Bright Data delivery webhook
 
@@ -414,15 +417,16 @@ All status changes go through `src/server/reports/state.ts`. Every write only ap
 ### S4. Collection timeouts and partial data
 
 - The start job arms `report.timeout` 16 minutes out (`COLLECTION_TIMEOUT_MINUTES`). It covers lost webhooks: the timeout polls Bright Data itself.
-- If collections are still running, the timeout re-arms every 5 minutes until 45 minutes (`COLLECTION_MAX_WAIT_MINUTES`).
-- At the limit, still-running snapshots are canceled. If at least one platform delivered (e.g. ChatGPT answered, Gemini stuck), the report is analyzed with what arrived; otherwise it fails with `TIMED_OUT`.
+- If collections are still running, the timeout re-arms every 5 minutes until 45 minutes (`COLLECTION_MAX_WAIT_MINUTES`). The next check is queued *before* polling, so a failing poll can't break the chain.
+- At the limit, still-running snapshots are canceled, even if Bright Data can't be polled at that moment. If at least one platform delivered (e.g. ChatGPT answered, Gemini stuck), the report is analyzed with what arrived; otherwise it fails with `TIMED_OUT`.
 
 ### S5. Retries and dead letters
 
 - Every job runs through `runReportJob`. A `NonRetryableError` (bad credentials, refusal, empty data, invalid request) fails the report immediately with its code. Any other error is recorded in `failure_detail` and rethrown so pg-boss retries with backoff.
-- Queue policies (`src/server/pipeline/queues.ts`): `start` and `analyze` are *exclusive* (one job per report at a time); `collect` is *stately* (one queued plus one active per report). The analyze job's expiry (15 minutes) exceeds the Claude client's worst case (4-minute timeout, one retry), so an expired job doesn't re-run while the first attempt is still paying for tokens.
-- When retries run out, pg-boss moves the job to `report.failed`. The dead-letter handler cancels outstanding snapshots and fails the report with a code inferred from where it stopped (`PROMPTS_FAILED`, `ANALYSIS_FAILED`, `COLLECTION_FAILED` or `INTERNAL`), releasing the credit.
-- Retries never pay twice for the expensive steps: visibility prompts are persisted, already-triggered collections aren't re-triggered, and completion is guarded.
+- Queue policies (`src/server/pipeline/queues.ts`): `start` and `analyze` are *exclusive* (one job per report at a time); `collect` is *stately* (one queued plus one active per report).
+- Job expiry always exceeds the work's worst case, so pg-boss never starts a second attempt while the first is still paying: `start` gets 10 minutes (prompt generation is capped at 2), `analyze` 15 (each Claude request is capped at 4). The Anthropic SDK's own retries are off, because they can wait out a long `retry-after`; jobs retry with bounded backoff instead.
+- When retries run out on `start` or `analyze`, pg-boss moves the job to `report.failed`. The dead-letter handler fails the report with a code inferred from where it stopped (`PROMPTS_FAILED`, `ANALYSIS_FAILED`, `COLLECTION_FAILED` or `INTERNAL`), releases the credit and cancels outstanding snapshots. `collect` has no dead letter: it's only a hint, and the timeout chain still finishes the report.
+- Retries never pay twice for the expensive steps: visibility prompts are persisted; the report is re-checked before every trigger, so nothing is bought after it ended; a collection is claimed atomically, and a snapshot triggered by a losing parallel attempt is canceled at once; status and progress only move forward; completion is guarded. Every permanent failure (including one mid-way through `start`) cancels snapshots already triggered.
 
 ### S6. The reconciler
 
@@ -430,6 +434,7 @@ A cron job (`report.reconcile`, every 5 minutes, one instance at a time) repairs
 
 | Finds | Does |
 |---|---|
+| Any active report older than 2 h 45 min (max wait + 2 h) | Fails it (`TIMED_OUT`, or `ANALYSIS_FAILED` if analyzing) and cancels its snapshots. A hard cap by age: retries that keep failing also keep `updated_at` fresh. |
 | `queued` for more than 10 minutes | Re-sends the start job; after an hour, fails it (`INTERNAL`) |
 | `collecting` with no update for 60 minutes | Sends a final timeout check |
 | `analyzing` with no update for 45 minutes | Fails it (`ANALYSIS_FAILED`) |
@@ -438,8 +443,10 @@ A cron job (`report.reconcile`, every 5 minutes, one instance at a time) repairs
 ### S7. Stripe webhooks and entitlements
 
 - Stripe calls `/api/auth/stripe/webhook`. The Better Auth Stripe plugin verifies the signature (`STRIPE_WEBHOOK_SECRET`) and keeps the `subscription` table in sync: plan, status, period start/end, billing interval, cancel-at-period-end.
-- Our `onEvent` hook then records each event id in `webhook_event` (duplicates are skipped) and handles `invoice.payment_failed` (J14).
-- **Entitlements** (`src/server/billing/entitlements.ts`) are computed per request from subscription rows with status `active`, `trialing` or `past_due`; the highest plan wins. Nothing else stores a "current plan", so there is no second source of truth to drift.
+- The plugin applies each event's snapshot in arrival order and swallows its own errors, which on its own could leave a stale row (Stripe doesn't guarantee order). So our `onEvent` hook re-fetches the subscription from Stripe after every subscription or checkout event and writes its current status, period, interval, plan and cancellation fields. This is idempotent and converges whatever the delivery order. If Stripe can't be reached, the hook throws, the endpoint answers 400 and Stripe retries.
+- Side effects such as the payment-failed email run once per event id (`webhook_event`), recorded in the same transaction so a failed send is retried.
+- The webhook path is exempt from the auth rate limiter (Stripe sends bursts from a few IPs). Without `STRIPE_WEBHOOK_SECRET`, the plugin gets a random secret, so events can't be forged on non-production deployments.
+- **Entitlements** (`src/server/billing/entitlements.ts`) are computed per request from subscription rows with status `active`, `trialing` or `past_due` whose period ended less than 3 days ago; the highest plan wins. The 3-day cut-off means a row left `active` by a lost cancellation can't grant paid access indefinitely. Nothing else stores a "current plan".
 
 ### S8. Live progress plumbing
 
@@ -469,19 +476,21 @@ All email goes through `src/server/email/send.ts` (Resend) using the templates i
 | Verify your email | Sign-up, resend, sign-in attempt while unverified | 24 hours |
 | Reset your password | Forgot password | 1 hour |
 | Payment failed | `invoice.payment_failed` webhook | n/a (links to `/billing`) |
+| You already have an account | Sign-up with an email (or alias) that already has an account | n/a (links to sign-in and reset) |
 
-Without `RESEND_API_KEY` (local development), emails are printed to the web server's console so links can be opened directly. Production refuses to start without the key.
+Without `RESEND_API_KEY` (local development), emails are printed to the web server's console so links can be opened directly. Production refuses to start without the key or with a placeholder `EMAIL_FROM` (Resend rejects unverified senders). Send failures are logged as `[email] send failed` even where the caller (Better Auth) swallows the error, and the resend and forgot-password forms show an error when the server can't send.
 
 ### S10. Abuse and cost controls
 
 Each report costs real money (Bright Data scrapes and Claude tokens), so free usage is fenced in layers:
 
-1. Turnstile on sign-up, sign-in and password reset, and on **every** report a free user creates.
+1. Turnstile on sign-up, sign-in and password reset, and on **every** report a free user creates. A misconfigured Turnstile secret is logged as a configuration error.
 2. Email verification is required before any report can be created (API returns 403 `EMAIL_NOT_VERIFIED` otherwise).
 3. Disposable email domains are blocked; aliases (`+tags`, Gmail dots) map to one normalized email with a unique index.
 4. Rate limits on auth endpoints, stored in Postgres and keyed by the client IP from the platform's trusted header (`TRUSTED_IP_HEADER`, default `x-real-ip`).
-5. Lifetime (not monthly) free allowance; per-user active-report cap; per-user advisory lock on creation; idempotency keys.
-6. Paid insights are only generated for paid tiers, so free reports use less Claude output.
+5. Lifetime (not monthly) free allowance; per-user active-report cap; per-user advisory lock on creation; idempotency keys; a daily cap on refunded, input-caused failures.
+6. `POST /api/reports` only accepts JSON from the app's own origin, so a sibling site can't spend a signed-in user's credits.
+7. Paid insights are only generated for paid tiers, so free reports use less Claude output.
 
 ---
 
@@ -501,8 +510,11 @@ Each report costs real money (Bright Data scrapes and Claude tokens), so free us
 | Report completes after the reconciler already failed it | Impossible: completion only applies to active reports. The late result is discarded and the credit stays released. |
 | User upgrades while a free report is running | That report finishes as a free-tier report (no insights) and settles against the free bucket it reserved from. |
 | Paid user downgrades | Old reports keep their data; paid sections show "Upgrade to unlock". |
-| Annual subscriber, month 7 | Monthly allowance for the 7th window since the subscription start. |
-| Subscription starts on the 31st | Windows reset on the last day of shorter months, then return to the 31st. |
+| Annual subscriber, month 7 | Monthly allowance for the 7th window since the start of the billing year. |
+| Subscription starts on the 31st | Monthly billing: one allowance per Stripe period (Jan 31 → Feb 28 → Mar 31). Annual: windows reset on the last day of shorter months, then return to the 31st. |
+| User switches monthly → annual → monthly in a week | One allowance throughout; the next resets when the latest billing window ends. |
+| Cancellation webhook lost or delivered out of order | The next subscription event re-syncs from Stripe; regardless, paid access stops 3 days after the recorded period end. |
+| Two start attempts run at once (slow model) | One triggers each collection; the other's duplicate snapshot is canceled. |
 | Viewing another user's report id | 404, indistinguishable from a missing report. |
 
 ## 7. Where each journey lives in the code

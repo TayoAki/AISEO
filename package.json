@@ -12,7 +12,7 @@
     "build": "next build && npm run build:node",
     "build:node": "esbuild worker=src/worker/index.ts migrate=src/server/db/migrate.ts --bundle --platform=node --target=node22 --format=esm --packages=external --outdir=dist",
     "start": "next start",
-    "start:worker": "node dist/worker.js",
+    "start:worker": "NODE_ENV=production node dist/worker.js",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
@@ -20,7 +20,7 @@
     "test:integration": "vitest run tests/integration",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx --env-file-if-exists=.env.local src/server/db/migrate.ts",
-    "db:migrate:deploy": "node dist/migrate.js",
+    "db:migrate:deploy": "NODE_ENV=production node dist/migrate.js",
     "db:studio": "drizzle-kit studio"
   },
   "dependencies": {

@@ -22,7 +22,15 @@ const STRENGTH_TONE = {
 
 const OPPORTUNITY_TONE = { High: "success", Medium: "info", Low: "neutral" } as const;
 
-export function KeywordReport({ result, insights }: { result: KeywordResult; insights: ReportDTO["insights"] }) {
+export function KeywordReport({
+  result,
+  insights,
+  viewerIsPaid,
+}: {
+  result: KeywordResult;
+  insights: ReportDTO["insights"];
+  viewerIsPaid: boolean;
+}) {
   const { coverage } = result;
 
   return (
@@ -143,6 +151,7 @@ export function KeywordReport({ result, insights }: { result: KeywordResult; ins
 
       <PaidSection
         state={insights}
+        viewerIsPaid={viewerIsPaid}
         title="AI insights and content plan"
         description="Key findings, content gaps, quick wins and a content plan built from this evidence."
       >

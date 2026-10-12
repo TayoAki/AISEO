@@ -15,6 +15,7 @@ import {
   handleCollect,
   handleReconcile,
   handleStart,
+  handleTimeout,
   runReportJob,
   type PipelineDeps,
 } from "@/server/pipeline/jobs";
@@ -117,6 +118,19 @@ describe("createReport", () => {
     await createReport({ db, boss }, { ...common, userId: other.id, idempotencyKey: randomUUID(), maxActiveReports: 1 });
     const blocked = await createReport({ db, boss }, { ...common, userId: other.id, idempotencyKey: randomUUID(), maxActiveReports: 1 });
     expect(blocked).toEqual({ status: "too_many_active", limit: 1 });
+  });
+
+  it("pauses new reports after repeated input-caused failures (which are refunded)", async () => {
+    const user = await createTestUser(db);
+    const input = { type: "keyword" as const, keyword: "simulate failure", country: "US" as const };
+    const args = { userId: user.id, input, entitlements: pro, now: new Date(), maxActiveReports: 10, maxFailedReportsPerDay: 2 };
+    for (let i = 0; i < 2; i++) {
+      const created = await createReport({ db, boss }, { ...args, idempotencyKey: randomUUID() });
+      if (created.status !== "created") throw new Error(created.status);
+      await failReport(db, created.reportId, "NO_USABLE_ANSWERS", "test");
+    }
+    const paused = await createReport({ db, boss }, { ...args, idempotencyKey: randomUUID() });
+    expect(paused).toEqual({ status: "too_many_failures", limit: 2 });
   });
 });
 
@@ -245,5 +259,126 @@ describe("guarded transitions and reconciliation", () => {
     await handleReconcile(deps);
     expect(await reportRow(reportId)).toMatchObject({ quotaState: "released" });
     expect(await bucketFor(reportId)).toMatchObject({ reserved: 0, used: 0 });
+  });
+});
+
+/** A collection provider that records calls and lets a test inject behavior. */
+class ScriptedProvider extends FakeCollectionProvider {
+  canceled: string[] = [];
+  triggered: string[] = [];
+  onTrigger: ((snapshotId: string) => Promise<void>) | null = null;
+  progressError: Error | null = null;
+
+  constructor() {
+    super({ notify: false, delayMs: 60 * 60_000 });
+  }
+
+  override async trigger(args: Parameters<FakeCollectionProvider["trigger"]>[0]): Promise<string> {
+    const snapshotId = await super.trigger(args);
+    this.triggered.push(snapshotId);
+    await this.onTrigger?.(snapshotId);
+    return snapshotId;
+  }
+
+  override async progress(snapshotId: string) {
+    if (this.progressError) throw this.progressError;
+    return super.progress(snapshotId);
+  }
+
+  override async cancel(snapshotId: string): Promise<void> {
+    this.canceled.push(snapshotId);
+    await super.cancel(snapshotId);
+  }
+}
+
+describe("pipeline robustness", () => {
+  function scriptedDeps(provider: ScriptedProvider, llm = new FakeLlm()): PipelineDeps {
+    return { ...deps, providers: { collections: provider, llm } };
+  }
+
+  it("never moves a report's status backwards", async () => {
+    const user = await createTestUser(db);
+    const reportId = await newReport(user.id, { type: "keyword", keyword: "forward only", country: "US" });
+    await db.update(report).set({ status: "analyzing" }).where(eq(report.id, reportId));
+    const { advanceReport } = await import("@/server/reports/state");
+    expect(await advanceReport(db, reportId, { status: "collecting", progress: 25, step: "late" })).toBe(false);
+    expect((await reportRow(reportId)).status).toBe("analyzing");
+  });
+
+  it("cancels a duplicate snapshot when a parallel start already triggered the collection", async () => {
+    const user = await createTestUser(db);
+    const reportId = await newReport(user.id, { type: "keyword", keyword: "parallel start", country: "US" });
+    const provider = new ScriptedProvider();
+    provider.onTrigger = async () => {
+      // Simulate the other attempt winning the race for this collection.
+      await db
+        .update(reportCollection)
+        .set({ status: "triggered", snapshotId: "winner" })
+        .where(eq(reportCollection.reportId, reportId));
+    };
+    await handleStart(scriptedDeps(provider), { reportId });
+    expect(provider.triggered).toHaveLength(1);
+    expect(provider.canceled).toEqual(provider.triggered);
+  });
+
+  it("doesn't trigger collections if the report ended during prompt generation", async () => {
+    const user = await createTestUser(db);
+    const reportId = await newReport(user.id, {
+      type: "visibility",
+      website: "https://acme.example",
+      brand: "Acme",
+      topic: "crm tools",
+    });
+    const provider = new ScriptedProvider();
+    const llm = new FakeLlm();
+    const generate = llm.generate.bind(llm);
+    llm.generate = (async (request: Parameters<FakeLlm["generate"]>[0]) => {
+      const output = await generate(request);
+      await failReport(db, reportId, "INTERNAL", "dead-lettered while the model was thinking");
+      return output;
+    }) as FakeLlm["generate"];
+    await handleStart(scriptedDeps(provider, llm), { reportId });
+    expect(provider.triggered).toHaveLength(0);
+  });
+
+  it("arms the next timeout check before polling, so a failing poll can't end the chain", async () => {
+    const user = await createTestUser(db);
+    const reportId = await newReport(user.id, { type: "keyword", keyword: "flaky poll", country: "US" });
+    const provider = new ScriptedProvider();
+    await handleStart(scriptedDeps(provider), { reportId });
+    provider.progressError = new Error("Bright Data 503");
+    await expect(handleTimeout(scriptedDeps(provider), { reportId, attempt: 1 })).rejects.toThrow("503");
+    const next = await db.execute<{ singleton_key: string }>(
+      sql`select singleton_key from pgboss.job where name = 'report.timeout' and singleton_key = ${`${reportId}:2`}`,
+    );
+    expect(next.rows).toHaveLength(1);
+  });
+
+  it("gives up after the max wait even when Bright Data can't be polled", async () => {
+    const user = await createTestUser(db);
+    const reportId = await newReport(user.id, { type: "keyword", keyword: "stuck forever", country: "US" });
+    const provider = new ScriptedProvider();
+    await handleStart(scriptedDeps(provider), { reportId });
+    await db.update(report).set({ startedAt: new Date(Date.now() - 3 * 60 * 60_000) }).where(eq(report.id, reportId));
+    provider.progressError = new Error("Bright Data 503");
+    await handleTimeout(scriptedDeps(provider), { reportId, attempt: 9 });
+    expect(await reportRow(reportId)).toMatchObject({ status: "failed", errorCode: "TIMED_OUT", quotaState: "released" });
+    expect(provider.canceled).toEqual(provider.triggered);
+  });
+
+  it("fails active reports past the maximum run time even if retries keep them 'fresh'", async () => {
+    const user = await createTestUser(db);
+    const reportId = await newReport(user.id, { type: "keyword", keyword: "zombie", country: "US" });
+    await db
+      .update(report)
+      .set({ status: "collecting", createdAt: new Date(Date.now() - 4 * 60 * 60_000) })
+      .where(eq(report.id, reportId));
+    await handleReconcile(deps);
+    expect(await reportRow(reportId)).toMatchObject({ status: "failed", errorCode: "TIMED_OUT", quotaState: "released" });
+  });
+
+  it("keeps the collect queue out of the dead-letter path", async () => {
+    const queue = await boss.getQueue(QUEUES.collect);
+    expect(queue?.deadLetter ?? null).toBeNull();
   });
 });

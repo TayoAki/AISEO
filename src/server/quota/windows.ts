@@ -1,7 +1,8 @@
 /**
- * Pure quota-window math. Free allowances are a single lifetime window; paid
- * allowances reset monthly, anchored to the subscription start (so annual
- * subscribers get twelve monthly allowances, not one).
+ * Pure quota-window math. Free allowances are a single lifetime window. Paid
+ * allowances reset every billing month: monthly plans follow Stripe's own
+ * billing period exactly, and annual plans get twelve monthly windows
+ * anchored to the start of the billing year.
  */
 import type { PlanId } from "../billing/plans";
 
@@ -52,11 +53,45 @@ export function startOfUtcMonth(now: Date): Date {
   return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
 }
 
+/** The subscription's current Stripe billing period, as stored by the Stripe plugin. */
+export type BillingPeriod = {
+  periodStart: Date | null;
+  periodEnd: Date | null;
+  /** Stripe price interval: "month" or "year". */
+  billingInterval: string | null;
+};
+
 /**
- * Window for a plan. Paid plans without a known period start fall back to the
- * UTC calendar month rather than failing.
+ * Allowance window for a paid subscription at `now`.
+ *
+ * - Monthly billing uses Stripe's period as is. Stripe keeps month-end anchors
+ *   (Jan 31 -> Feb 28 -> Mar 31), so computing months from the latest period
+ *   start would drift and open a second window inside one billing period.
+ * - Annual billing gets monthly windows from the start of the billing year,
+ *   never extending past its end.
+ * - If `now` is past the period end, the renewal hasn't been recorded yet:
+ *   the next period starts exactly at the old end, so the window starts there
+ *   too and keeps the same bucket once the renewal arrives.
+ * - Without a known period, the UTC calendar month is used.
  */
-export function windowForPlan(plan: PlanId, anchor: Date | null, now: Date): QuotaWindow {
+export function paidWindow(period: BillingPeriod | null, now: Date): QuotaWindow {
+  const start = period?.periodStart ?? null;
+  const end = period?.periodEnd ?? null;
+  if (!start) return monthlyWindow(startOfUtcMonth(now), now);
+
+  if (end && end.getTime() > start.getTime()) {
+    if (now.getTime() >= end.getTime()) return { start: end, end: addMonthsClamped(end, 1) };
+    if (period?.billingInterval !== "year") return { start, end };
+  }
+
+  const window = monthlyWindow(start, now);
+  if (end && window.end && window.end.getTime() > end.getTime() && window.start.getTime() < end.getTime()) {
+    return { start: window.start, end };
+  }
+  return window;
+}
+
+export function windowForPlan(plan: PlanId, period: BillingPeriod | null, now: Date): QuotaWindow {
   if (plan === "free") return { start: LIFETIME_WINDOW_START, end: null };
-  return monthlyWindow(anchor ?? startOfUtcMonth(now), now);
+  return paidWindow(period, now);
 }

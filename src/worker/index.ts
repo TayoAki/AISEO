@@ -6,6 +6,7 @@
 import { getDb, getPool } from "../server/db/client";
 import { assertProductionConfig, getEnv } from "../server/env";
 import { createBoss } from "../server/pipeline/boss";
+import { describeError } from "../server/pipeline/errors";
 import {
   handleAnalyze,
   handleCollect,
@@ -24,6 +25,16 @@ import {
   type ReportJobData,
   type TimeoutJobData,
 } from "../server/pipeline/queues";
+
+/** pg-boss stores handler errors on the job row only; log them where operators look. */
+async function logged(job: string, reportId: string | null, run: () => Promise<void>): Promise<void> {
+  try {
+    await run();
+  } catch (error) {
+    console.error(`[pipeline] ${job} handler failed, will retry`, { reportId, error: describeError(error) });
+    throw error;
+  }
+}
 
 async function main(): Promise<void> {
   const env = getEnv();
@@ -48,10 +59,10 @@ async function main(): Promise<void> {
     if (job) await runReportJob(deps, "timeout", job.data.reportId, () => handleTimeout(deps, job.data));
   });
   await boss.work<ReportJobData>(QUEUES.failed, { batchSize: 1 }, async ([job]) => {
-    if (job) await handleDeadLetter(deps, job.data);
+    if (job) await logged("dead-letter", job.data.reportId, () => handleDeadLetter(deps, job.data));
   });
   await boss.work(QUEUES.reconcile, { batchSize: 1 }, async () => {
-    await handleReconcile(deps);
+    await logged("reconcile", null, () => handleReconcile(deps));
   });
   await boss.schedule(QUEUES.reconcile, RECONCILE_CRON, {}, { tz: "UTC" });
 
@@ -66,11 +77,15 @@ async function main(): Promise<void> {
     if (stopping) return;
     stopping = true;
     console.info(`[worker] ${signal} received, draining jobs`);
+    let exitCode = 0;
     try {
       await boss.stop({ graceful: true, timeout: 25_000 });
       await getPool().end();
+    } catch (error) {
+      exitCode = 1;
+      console.error("[worker] shutdown failed", { error: describeError(error) });
     } finally {
-      process.exit(0);
+      process.exit(exitCode);
     }
   };
   process.on("SIGTERM", () => void shutdown("SIGTERM"));

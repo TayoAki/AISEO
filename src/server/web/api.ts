@@ -34,6 +34,22 @@ export async function requireApiUser(request: Request) {
   return { user: session.user } as const;
 }
 
+/**
+ * Cross-site protection for cookie-authenticated mutations (Better Auth does
+ * this for /api/auth only). The request must come from our own origin and be
+ * JSON, which a cross-site form or a preflight-free text/plain fetch can't fake.
+ */
+export function rejectCrossSite(request: Request, appUrl: string): NextResponse | null {
+  if (request.headers.get("origin") !== new URL(appUrl).origin) {
+    return fail(403, "FORBIDDEN_ORIGIN", "This request must come from the AISEO app.");
+  }
+  const contentType = request.headers.get("content-type") ?? "";
+  if (!contentType.toLowerCase().startsWith("application/json")) {
+    return fail(415, "UNSUPPORTED_MEDIA_TYPE", "Send the request as JSON.");
+  }
+  return null;
+}
+
 export function clientIp(request: Request, header: string): string | null {
   const value = request.headers.get(header);
   return value ? value.split(",")[0]!.trim() : null;

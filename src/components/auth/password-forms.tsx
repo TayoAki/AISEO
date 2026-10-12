@@ -26,8 +26,13 @@ export function ForgotPasswordForm({ siteKey }: { siteKey: string }) {
       fetchOptions: { headers: captchaHeaders(token) },
     });
     setPending(false);
-    if (requestError && requestError.status === 429) {
-      setError("Too many attempts. Please wait a few minutes and try again.");
+    if (requestError && (requestError.status === 429 || requestError.status >= 500)) {
+      setError(
+        requestError.status === 429
+          ? "Too many attempts. Please wait a few minutes and try again."
+          : "We couldn't send the email right now. Please try again in a few minutes.",
+      );
+      setToken(null);
       setWidgetKey((k) => k + 1);
       return;
     }
@@ -141,7 +146,9 @@ export function ResendVerification({ initialEmail }: { initialEmail: string }) {
     setMessage(
       error && error.status === 429
         ? { tone: "danger", text: "Too many requests. Wait a few minutes before trying again." }
-        : { tone: "success", text: "If that address needs verifying, a new link is on its way." },
+        : error && error.status >= 500
+          ? { tone: "danger", text: "We couldn't send the email right now. Please try again in a few minutes." }
+          : { tone: "success", text: "If that address needs verifying, a new link is on its way." },
     );
   }
 

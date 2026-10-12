@@ -12,6 +12,8 @@ export type StructuredRequest<S extends z.ZodType> = {
   prompt: string;
   schema: S;
   maxTokens?: number;
+  /** Request timeout; defaults to 4 minutes. */
+  timeoutMs?: number;
   /** Structured hints for the fake provider; ignored by the live client. */
   fakeContext?: Record<string, unknown>;
 };
@@ -37,15 +39,18 @@ export class AnthropicLlm implements StructuredLlm {
   private readonly client: Anthropic;
 
   constructor(private readonly options: AnthropicLlmOptions) {
-    // Worst case (timeout x attempts) must stay well under the analyze job's
-    // expireInSeconds, or pg-boss could start a second paid analysis.
-    this.client = new Anthropic({ apiKey: options.apiKey, maxRetries: 1, timeout: 4 * 60 * 1000 });
+    // No SDK-level retries: they can wait out any retry-after header, which
+    // could outlive the pg-boss job and start a second paid call in parallel.
+    // Jobs retry with bounded backoff instead, and each request's timeout
+    // stays well under its job's expireInSeconds.
+    this.client = new Anthropic({ apiKey: options.apiKey, maxRetries: 0, timeout: 4 * 60 * 1000 });
   }
 
   async generate<S extends z.ZodType>(request: StructuredRequest<S>): Promise<z.output<S>> {
     let message;
     try {
-      message = await this.client.beta.messages.parse({
+      message = await this.client.beta.messages.parse(
+        {
         model: this.options.model,
         max_tokens: request.maxTokens ?? 16_000,
         ...(this.options.refusalFallback
@@ -57,7 +62,9 @@ export class AnthropicLlm implements StructuredLlm {
         },
         system: [{ type: "text", text: request.system, cache_control: { type: "ephemeral" } }],
         messages: [{ role: "user", content: request.prompt }],
-      });
+        },
+        { timeout: request.timeoutMs ?? 4 * 60 * 1000 },
+      );
     } catch (error) {
       if (
         error instanceof Anthropic.AuthenticationError ||
@@ -69,8 +76,8 @@ export class AnthropicLlm implements StructuredLlm {
       if (error instanceof Anthropic.BadRequestError) {
         throw new NonRetryableError("ANALYSIS_FAILED", `Anthropic 400 (${request.task}): ${error.message}`);
       }
-      // Rate limits, 5xx and connection errors (already retried by the SDK) bubble
-      // up so the job retries with backoff.
+      // Rate limits, 5xx, timeouts and connection errors bubble up so the job
+      // retries with backoff.
       throw error;
     }
 

@@ -9,7 +9,7 @@ import { getWebBoss } from "@/server/pipeline/boss";
 import { createReport } from "@/server/reports/create";
 import { getReportForUser, listReportsForUser } from "@/server/reports/queries";
 import { serializeReport, serializeReportSummary } from "@/server/reports/serialize";
-import { clientIp, fail, ok, requireApiUser } from "@/server/web/api";
+import { clientIp, fail, ok, rejectCrossSite, requireApiUser } from "@/server/web/api";
 import { verifyTurnstile } from "@/server/web/turnstile";
 
 export const dynamic = "force-dynamic";
@@ -22,6 +22,10 @@ const createBodySchema = z.object({
 });
 
 export async function POST(request: Request) {
+  const env = getEnv();
+  const crossSite = rejectCrossSite(request, env.APP_URL);
+  if (crossSite) return crossSite;
+
   const auth = await requireApiUser(request);
   if ("error" in auth) return auth.error;
 
@@ -34,7 +38,6 @@ export async function POST(request: Request) {
     return fail(400, "INVALID_INPUT", "Check the highlighted fields.", z.flattenError(input.error).fieldErrors);
   }
 
-  const env = getEnv();
   const db = getDb();
   const entitlements = await getEntitlements(db, auth.user.id);
 
@@ -53,6 +56,7 @@ export async function POST(request: Request) {
       entitlements,
       now: new Date(),
       maxActiveReports: env.MAX_ACTIVE_REPORTS_PER_USER,
+      maxFailedReportsPerDay: env.MAX_FAILED_REPORTS_PER_DAY,
     },
   );
 
@@ -64,6 +68,12 @@ export async function POST(request: Request) {
         entitlements.isPaid
           ? `You've used this month's ${featureLabel(result.feature).toLowerCase()}. Upgrade or wait for your allowance to reset.`
           : `You've used your free ${featureLabel(result.feature).toLowerCase()}. Upgrade to keep going.`,
+      );
+    case "too_many_failures":
+      return fail(
+        429,
+        "TOO_MANY_FAILURES",
+        "Several of your recent reports couldn't be completed, so new reports are paused for up to 24 hours. Try a broader keyword or topic later.",
       );
     case "too_many_active":
       return fail(

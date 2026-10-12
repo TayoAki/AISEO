@@ -25,6 +25,9 @@ export default async function BillingPage({ searchParams }: { searchParams: Sear
   const plan = PLANS[entitlements.plan];
   const subscription = entitlements.subscription;
   const annual = subscription?.billingInterval === "year";
+  // Stripe only changes plans on active or trialing subscriptions; for anything
+  // else (past_due) the plugin would start a second subscription in Checkout.
+  const canChangePlan = !subscription || subscription.status === "active" || subscription.status === "trialing";
 
   return (
     <div className="flex flex-col gap-8">
@@ -56,11 +59,11 @@ export default async function BillingPage({ searchParams }: { searchParams: Sear
           <p className="text-sm text-muted-foreground">
             {subscription
               ? `$${annual ? plan.priceAnnualUsd : plan.priceMonthlyUsd} per ${annual ? "year" : "month"}. ${
-                  subscription.periodEnd
-                    ? subscription.cancelAtPeriodEnd
-                      ? `Ends on ${formatDay(subscription.periodEnd)}; you'll move to the Free plan after that.`
-                      : `Renews on ${formatDay(subscription.periodEnd)}.`
-                    : ""
+                  subscription.endsAt
+                    ? `Ends on ${formatDay(subscription.endsAt)}; you'll move to the Free plan after that.`
+                    : subscription.periodEnd
+                      ? `Renews on ${formatDay(subscription.periodEnd)}.`
+                      : ""
                 }`
               : "Free forever. Your free reports don't reset; upgrade for monthly allowances and AI insights."}
           </p>
@@ -91,7 +94,14 @@ export default async function BillingPage({ searchParams }: { searchParams: Sear
         ) : null}
       </section>
 
-      {billingEnabled ? (
+      {billingEnabled && !canChangePlan ? (
+        <Alert tone="warning" title="Plan changes are paused">
+          Update your payment method with Manage billing first. Once the outstanding invoice is paid you can change
+          plans here.
+        </Alert>
+      ) : null}
+
+      {billingEnabled && canChangePlan ? (
         <section aria-labelledby="plans" className="flex flex-col gap-3">
           <h2 id="plans" className="text-lg font-semibold">
             {entitlements.isPaid ? "Change plan" : "Upgrade"}

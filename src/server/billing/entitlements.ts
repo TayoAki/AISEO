@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, isNull, or } from "drizzle-orm";
 
 import type { Executor } from "../db/client";
 import { subscription } from "../db/schema";
@@ -11,6 +11,14 @@ import { PLANS, type PlanId } from "./plans";
  */
 export const PAID_STATUSES = ["active", "trialing", "past_due"] as const;
 
+/**
+ * A paid row stops counting this long after its period end, even if its
+ * status still says active. Renewals move the period end forward within
+ * minutes; a row that doesn't is stale (a lost or out-of-order webhook), and
+ * must not grant paid access forever.
+ */
+export const PERIOD_END_GRACE_MS = 3 * 24 * 60 * 60 * 1000;
+
 export type SubscriptionSummary = {
   plan: PlanId;
   status: string;
@@ -18,6 +26,8 @@ export type SubscriptionSummary = {
   periodEnd: Date | null;
   billingInterval: string | null;
   cancelAtPeriodEnd: boolean;
+  /** When a scheduled cancellation takes effect, if one is pending. */
+  endsAt: Date | null;
 };
 
 export type Entitlements = {
@@ -39,7 +49,7 @@ export function freeEntitlements(): Entitlements {
 }
 
 /** Resolves the user's plan from the Stripe plugin's subscription rows. */
-export async function getEntitlements(db: Executor, userId: string): Promise<Entitlements> {
+export async function getEntitlements(db: Executor, userId: string, now = new Date()): Promise<Entitlements> {
   const rows = await db
     .select({
       plan: subscription.plan,
@@ -48,10 +58,15 @@ export async function getEntitlements(db: Executor, userId: string): Promise<Ent
       periodEnd: subscription.periodEnd,
       billingInterval: subscription.billingInterval,
       cancelAtPeriodEnd: subscription.cancelAtPeriodEnd,
+      cancelAt: subscription.cancelAt,
     })
     .from(subscription)
     .where(
-      and(eq(subscription.referenceId, userId), inArray(subscription.status, [...PAID_STATUSES])),
+      and(
+        eq(subscription.referenceId, userId),
+        inArray(subscription.status, [...PAID_STATUSES]),
+        or(isNull(subscription.periodEnd), gt(subscription.periodEnd, new Date(now.getTime() - PERIOD_END_GRACE_MS))),
+      ),
     )
     .orderBy(desc(subscription.periodStart))
     .limit(5);
@@ -68,6 +83,8 @@ export async function getEntitlements(db: Executor, userId: string): Promise<Ent
         periodEnd: row.periodEnd,
         billingInterval: row.billingInterval,
         cancelAtPeriodEnd: row.cancelAtPeriodEnd ?? false,
+        // Stripe records a pending cancellation either way, depending on how it was scheduled.
+        endsAt: row.cancelAt ?? (row.cancelAtPeriodEnd ? row.periodEnd : null),
       };
     }
   }

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { isDisposableEmail, normalizeEmail } from "@/server/auth/email-policy";
 import { freeEntitlements, type Entitlements } from "@/server/billing/entitlements";
 import { collectionWebhookUrl, verifyCollectionToken } from "@/server/pipeline/webhook-token";
+import { safeNextPath } from "@/server/public-config";
 import type { ReportRow } from "@/server/reports/queries";
 import { serializeReport } from "@/server/reports/serialize";
 
@@ -91,8 +92,9 @@ describe("serializeReport (server-side paywall)", () => {
 
   it("explains when a report was generated on the free plan", () => {
     const { insights: _omit, ...freeResult } = keywordResult;
-    const dto = serializeReport(row({ tier: "free", result: freeResult }), pro);
-    expect(dto.insights).toBe("notGenerated");
+    expect(serializeReport(row({ tier: "free", result: freeResult }), pro).insights).toBe("notGenerated");
+    // Upgrading can't unlock sections that were never generated, so free viewers aren't told it would.
+    expect(serializeReport(row({ tier: "free", result: freeResult }), freeEntitlements()).insights).toBe("notGenerated");
   });
 
   it("only exposes the safe error message for failed reports", () => {
@@ -102,5 +104,24 @@ describe("serializeReport (server-side paywall)", () => {
     );
     expect(dto.error).toEqual({ code: "TIMED_OUT", message: "Took too long." });
     expect(dto.keyword).toBeNull();
+  });
+});
+
+describe("safeNextPath (open redirect protection)", () => {
+  it("keeps same-site paths with their query", () => {
+    expect(safeNextPath("/reports?type=keyword")).toBe("/reports?type=keyword");
+    expect(safeNextPath(["/billing", "/other"])).toBe("/billing");
+  });
+
+  it.each([
+    ["missing", undefined],
+    ["absolute URL", "https://evil.example"],
+    ["protocol-relative", "//evil.example"],
+    ["backslash", "/\\evil.example"],
+    ["tab trick", "/\t/evil.example"],
+    ["newline trick", "/\n/evil.example"],
+    ["no leading slash", "evil.example"],
+  ])("rejects %s", (_label, value) => {
+    expect(safeNextPath(value)).toBe("/dashboard");
   });
 });

@@ -9,7 +9,7 @@
  * completed) or released (report failed), exactly once, guarded by the
  * report's `quota_state`.
  */
-import { and, eq, sql } from "drizzle-orm";
+import { and, desc, eq, gt, isNull, lt, or, sql } from "drizzle-orm";
 
 import type { Entitlements } from "../billing/entitlements";
 import { FEATURES, PLANS, type Feature, type PlanId } from "../billing/plans";
@@ -33,18 +33,76 @@ export function quotaTarget(
   now: Date,
 ): QuotaTarget {
   const plan = entitlements.plan;
-  const anchor = entitlements.subscription?.periodStart ?? null;
   return {
     userId,
     feature,
     plan,
-    window: windowForPlan(plan, anchor, now),
+    window: windowForPlan(plan, entitlements.subscription, now),
     quota: PLANS[plan].limits[feature],
   };
 }
 
-/** Returns the bucket id for the target window, creating the bucket if needed. */
+type BucketRow = { id: string; used: number; reserved: number; quota: number; windowEnd: Date | null };
+
+const bucketColumns = {
+  id: usageBucket.id,
+  used: usageBucket.used,
+  reserved: usageBucket.reserved,
+  quota: usageBucket.quota,
+  windowEnd: usageBucket.windowEnd,
+};
+
+/**
+ * The existing bucket that covers the target window. Paid windows match any
+ * bucket of the same plan that overlaps them: changing the billing interval
+ * moves Stripe's anchor, and the allowance must not restart mid-window.
+ */
+async function findBucket(db: Executor, target: QuotaTarget): Promise<BucketRow | null> {
+  const sameOwner = and(
+    eq(usageBucket.userId, target.userId),
+    eq(usageBucket.feature, target.feature),
+    eq(usageBucket.plan, target.plan),
+  );
+  const { start, end } = target.window;
+  const [row] = await db
+    .select(bucketColumns)
+    .from(usageBucket)
+    .where(
+      end === null
+        ? and(sameOwner, eq(usageBucket.windowStart, start))
+        : and(
+            sameOwner,
+            lt(usageBucket.windowStart, end),
+            or(isNull(usageBucket.windowEnd), gt(usageBucket.windowEnd, start)),
+          ),
+    )
+    .orderBy(desc(usageBucket.windowStart))
+    .limit(1);
+  return row ?? null;
+}
+
+/** When an overlapping bucket is reused, its window runs until the later end. */
+function effectiveEnd(bucket: BucketRow | null, target: QuotaTarget): Date | null {
+  const end = target.window.end;
+  if (!bucket || !bucket.windowEnd || !end) return bucket?.windowEnd ?? end;
+  return bucket.windowEnd.getTime() >= end.getTime() ? bucket.windowEnd : end;
+}
+
+/**
+ * Returns the bucket id for the target window, creating the bucket if needed.
+ * Callers creating reports hold the per-user advisory lock, so the
+ * find-then-insert can't race with another reservation for the same user.
+ */
 export async function ensureBucket(db: Executor, target: QuotaTarget): Promise<string> {
+  const existing = await findBucket(db, target);
+  if (existing) {
+    const end = effectiveEnd(existing, target);
+    if (end && existing.windowEnd && end.getTime() !== existing.windowEnd.getTime()) {
+      await db.update(usageBucket).set({ windowEnd: end }).where(eq(usageBucket.id, existing.id));
+    }
+    return existing.id;
+  }
+
   const inserted = await db
     .insert(usageBucket)
     .values({
@@ -61,20 +119,9 @@ export async function ensureBucket(db: Executor, target: QuotaTarget): Promise<s
     .returning({ id: usageBucket.id });
   if (inserted[0]) return inserted[0].id;
 
-  const [existing] = await db
-    .select({ id: usageBucket.id })
-    .from(usageBucket)
-    .where(
-      and(
-        eq(usageBucket.userId, target.userId),
-        eq(usageBucket.feature, target.feature),
-        eq(usageBucket.plan, target.plan),
-        eq(usageBucket.windowStart, target.window.start),
-      ),
-    )
-    .limit(1);
-  if (!existing) throw new Error("usage bucket vanished after conflict");
-  return existing.id;
+  const raced = await findBucket(db, target);
+  if (!raced) throw new Error("usage bucket vanished after conflict");
+  return raced.id;
 }
 
 /** Atomically takes one unit from the bucket. False when the allowance is used up. */
@@ -142,19 +189,9 @@ export async function getUsageSummary(
 ): Promise<Record<Feature, FeatureUsage>> {
   const summary = {} as Record<Feature, FeatureUsage>;
   for (const feature of FEATURES) {
+    // Same bucket resolution as ensureBucket, so the meter matches what a new report would use.
     const target = quotaTarget(userId, feature, entitlements, now);
-    const [bucket] = await db
-      .select({ used: usageBucket.used, reserved: usageBucket.reserved, quota: usageBucket.quota })
-      .from(usageBucket)
-      .where(
-        and(
-          eq(usageBucket.userId, userId),
-          eq(usageBucket.feature, feature),
-          eq(usageBucket.plan, target.plan),
-          eq(usageBucket.windowStart, target.window.start),
-        ),
-      )
-      .limit(1);
+    const bucket = await findBucket(db, target);
     const quota = bucket?.quota ?? target.quota;
     const used = bucket?.used ?? 0;
     const reserved = bucket?.reserved ?? 0;
@@ -165,7 +202,7 @@ export async function getUsageSummary(
       used,
       reserved,
       remaining: Math.max(quota - used - reserved, 0),
-      resetsAt: target.window.end,
+      resetsAt: effectiveEnd(bucket, target),
     };
   }
   return summary;

@@ -20,10 +20,12 @@ function Check({ on, label }: { on: boolean; label: string }) {
 export function VisibilityReport({
   result,
   insights,
+  viewerIsPaid,
   brand,
 }: {
   result: VisibilityResult;
   insights: ReportDTO["insights"];
+  viewerIsPaid: boolean;
   brand: string;
 }) {
   return (
@@ -105,6 +107,7 @@ export function VisibilityReport({
 
       <PaidSection
         state={insights}
+        viewerIsPaid={viewerIsPaid}
         title="Recommendations"
         description="Prioritised actions to get mentioned and cited more often."
       >

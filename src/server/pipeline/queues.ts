@@ -30,7 +30,8 @@ type QueueDefinition = {
   retryBackoff?: boolean;
   retryDelayMax?: number;
   expireInSeconds: number;
-  deadLetter?: QueueName;
+  /** null clears a dead letter on queues created by an earlier version. */
+  deadLetter?: QueueName | null;
 };
 
 export const QUEUE_DEFINITIONS: QueueDefinition[] = [
@@ -42,11 +43,14 @@ export const QUEUE_DEFINITIONS: QueueDefinition[] = [
     retryDelay: 10,
     retryBackoff: true,
     retryDelayMax: 300,
-    expireInSeconds: 300,
+    // Prompt generation (2 min timeout) plus two triggers (30 s each), with room to spare.
+    expireInSeconds: 600,
     deadLetter: QUEUES.failed,
   },
   {
-    // Webhook-driven: check snapshot progress and hand off to analysis.
+    // Webhook-driven: check snapshot progress and hand off to analysis. Only a
+    // hint: if it keeps failing, the timeout chain still finishes the report,
+    // so it must not dead-letter (that would fail a healthy report).
     name: QUEUES.collect,
     policy: "stately",
     retryLimit: 5,
@@ -54,7 +58,7 @@ export const QUEUE_DEFINITIONS: QueueDefinition[] = [
     retryBackoff: true,
     retryDelayMax: 300,
     expireInSeconds: 120,
-    deadLetter: QUEUES.failed,
+    deadLetter: null,
   },
   {
     // Download snapshots, validate rows, call Claude, compute metrics, complete.
@@ -98,12 +102,12 @@ export const QUEUE_DEFINITIONS: QueueDefinition[] = [
 export async function ensureQueues(boss: PgBoss): Promise<void> {
   // Dead-letter targets must exist before the queues that reference them.
   const ordered = [...QUEUE_DEFINITIONS].sort((a, b) => Number(Boolean(a.deadLetter)) - Number(Boolean(b.deadLetter)));
-  for (const { name, policy, ...options } of ordered) {
+  for (const { name, policy, deadLetter, ...options } of ordered) {
     const existing = await boss.getQueue(name);
     if (existing) {
-      await boss.updateQueue(name, options);
+      await boss.updateQueue(name, { ...options, deadLetter: deadLetter ?? null });
     } else {
-      await boss.createQueue(name, { policy, ...options });
+      await boss.createQueue(name, { policy, ...options, ...(deadLetter ? { deadLetter } : {}) });
     }
   }
 }

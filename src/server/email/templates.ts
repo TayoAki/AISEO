@@ -60,3 +60,19 @@ export function paymentFailedEmail(to: string, name: string, billingUrl: string)
     text: `Hi ${name},\n\nYour latest AISEO payment failed. Stripe will retry automatically; update your payment method to keep your plan:\n${billingUrl}`,
   };
 }
+
+/** Sent when someone signs up with an address (or an alias of one) that already has an account. */
+export function existingAccountEmail(to: string, appUrl: string): EmailMessage {
+  const signIn = `${appUrl}/sign-in`;
+  const reset = `${appUrl}/forgot-password`;
+  return {
+    to,
+    subject: "You already have an AISEO account",
+    html: layout(
+      "You already have an account",
+      `<p style="margin:0">Someone (hopefully you) tried to create an AISEO account with this email address, which already belongs to an account. Sign in instead, or <a href="${escapeHtml(reset)}">reset your password</a> if you've forgotten it. If this wasn't you, you can ignore this email.</p>`,
+      { label: "Sign in", url: signIn },
+    ),
+    text: `Someone (hopefully you) tried to create an AISEO account with this email address, which already belongs to an account.\n\nSign in: ${signIn}\nForgot your password? ${reset}\n\nIf this wasn't you, you can ignore this email.`,
+  };
+}

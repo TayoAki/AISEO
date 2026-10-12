@@ -26,7 +26,12 @@ class ReportUpdatesListener {
   private connect(): Promise<void> {
     if (this.client) return Promise.resolve();
     this.connecting ??= (async () => {
-      const client = new Client({ connectionString: getEnv().DATABASE_URL, application_name: "aiseo-realtime" });
+      // keepAlive surfaces half-open connections as errors instead of silence.
+      const client = new Client({
+        connectionString: getEnv().DATABASE_URL,
+        application_name: "aiseo-realtime",
+        keepAlive: true,
+      });
       client.on("notification", (message) => {
         if (message.channel === REPORT_UPDATES_CHANNEL && message.payload) {
           this.emitter.emit(message.payload);

@@ -95,12 +95,13 @@ export default async function ReportPage({ params }: { params: Promise<{ id: str
       {report.status === "failed" || report.status === "canceled" ? <FailureCard report={report} /> : null}
 
       {report.status === "completed" && report.keyword ? (
-        <KeywordReport result={report.keyword} insights={report.insights} />
+        <KeywordReport result={report.keyword} insights={report.insights} viewerIsPaid={entitlements.isPaid} />
       ) : null}
       {report.status === "completed" && report.visibility ? (
         <VisibilityReport
           result={report.visibility}
           insights={report.insights}
+          viewerIsPaid={entitlements.isPaid}
           brand={report.input?.type === "visibility" ? report.input.brand : "your brand"}
         />
       ) : null}

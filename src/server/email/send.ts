@@ -14,24 +14,35 @@ export async function sendEmail(message: EmailMessage): Promise<void> {
     return;
   }
 
-  const response = await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${env.RESEND_API_KEY}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      from: env.EMAIL_FROM,
-      to: [message.to],
-      subject: message.subject,
-      html: message.html,
-      text: message.text,
-    }),
-    signal: AbortSignal.timeout(10_000),
-  });
+  const fail = (detail: string): never => {
+    // Callers such as Better Auth may swallow this error; make sure it's visible.
+    console.error("[email] send failed", { subject: message.subject, toDomain: message.to.split("@")[1], detail });
+    throw new Error(`Email could not be sent: ${detail}`);
+  };
+
+  let response: Response;
+  try {
+    response = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${env.RESEND_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        from: env.EMAIL_FROM,
+        to: [message.to],
+        subject: message.subject,
+        html: message.html,
+        text: message.text,
+      }),
+      signal: AbortSignal.timeout(10_000),
+    });
+  } catch (error) {
+    return fail(`request failed: ${(error as Error).message}`);
+  }
 
   if (!response.ok) {
-    const body = (await response.text()).slice(0, 300);
-    throw new Error(`Email provider rejected the message (${response.status}): ${body}`);
+    const body = (await response.text().catch(() => "")).slice(0, 300);
+    fail(`provider rejected the message (${response.status}): ${body}`);
   }
 }

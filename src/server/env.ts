@@ -58,6 +58,8 @@ const envSchema = z
     WEBHOOK_SIGNING_SECRET: z.string().min(32).default(DEV_SECRET),
 
     MAX_ACTIVE_REPORTS_PER_USER: z.coerce.number().int().min(1).max(20).default(3),
+    /** Refunded failures caused by a user's input, per rolling 24 hours, before new reports pause. */
+    MAX_FAILED_REPORTS_PER_DAY: z.coerce.number().int().min(1).max(100).default(5),
     WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(50).default(4),
     /** Minutes to wait for Bright Data before polling, then failing. */
     COLLECTION_TIMEOUT_MINUTES: z.coerce.number().int().min(5).max(120).default(16),
@@ -86,7 +88,9 @@ let cached: Env | undefined;
 
 export function getEnv(): Env {
   if (cached) return cached;
-  const parsed = envSchema.safeParse(process.env);
+  // Empty values (KEY= in an env file) mean "not set", so defaults still apply.
+  const raw = Object.fromEntries(Object.entries(process.env).filter(([, value]) => value !== undefined && value !== ""));
+  const parsed = envSchema.safeParse(raw);
   if (!parsed.success) {
     const details = parsed.error.issues
       .map((issue) => `  - ${issue.path.join(".") || "env"}: ${issue.message}`)
@@ -110,6 +114,10 @@ const PRODUCTION_REQUIREMENTS: Record<ServiceRole, (env: Env) => string[]> = {
     ...(env.TURNSTILE_SITE_KEY === TURNSTILE_TEST_SITE_KEY ? ["TURNSTILE_SITE_KEY must be a real key"] : []),
     ...(env.TURNSTILE_SECRET_KEY === TURNSTILE_TEST_SECRET_KEY ? ["TURNSTILE_SECRET_KEY must be a real key"] : []),
     ...(env.RESEND_API_KEY ? [] : ["RESEND_API_KEY must be set"]),
+    // Resend rejects unverified senders, which would silently break sign-up emails.
+    ...(/@(localhost|example\.(com|org|net))>?$/i.test(env.EMAIL_FROM.trim())
+      ? ["EMAIL_FROM must use your verified sending domain"]
+      : []),
     ...(
       [
         "STRIPE_SECRET_KEY",

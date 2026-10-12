@@ -36,6 +36,8 @@ export async function generateVisibilityPrompts(llm: StructuredLlm, input: Visib
     prompt: `Topic or category: ${input.topic}\nAudited brand (never mention): ${input.brand}\nAudited website (never mention): ${host}`,
     schema: promptPlanSchema,
     maxTokens: 4_000,
+    // Short task: fail fast so the start job never outlives its expiry.
+    timeoutMs: 2 * 60 * 1000,
     fakeContext: { topic: input.topic },
   });
 

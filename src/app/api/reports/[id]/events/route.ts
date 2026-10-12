@@ -104,7 +104,12 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
       await refresh();
       if (closed) return;
 
-      const heartbeat = setInterval(() => write(": ping\n\n"), HEARTBEAT_MS);
+      // Each heartbeat also re-reads the row, so a missed notification (or a
+      // silently dead LISTEN connection) delays an update by at most 20 s.
+      const heartbeat = setInterval(() => {
+        write(": ping\n\n");
+        void refresh();
+      }, HEARTBEAT_MS);
       const maxLife = setTimeout(() => {
         send("reconnect", {});
         close();

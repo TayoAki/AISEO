@@ -1,4 +1,4 @@
-import { and, count, eq, inArray, sql } from "drizzle-orm";
+import { and, count, eq, gt, inArray, sql } from "drizzle-orm";
 import { fromDrizzle, type PgBoss } from "pg-boss";
 
 import { reportTitle, type ReportInput } from "@/lib/report-input";
@@ -7,6 +7,7 @@ import type { Entitlements } from "../billing/entitlements";
 import type { Feature } from "../billing/plans";
 import type { Database } from "../db/client";
 import { report } from "../db/schema";
+import { INPUT_FAILURE_CODES } from "../pipeline/errors";
 import { QUEUES, type ReportJobData } from "../pipeline/queues";
 import { ensureBucket, quotaTarget, reserveUnit } from "../quota/quota";
 import { ACTIVE_STATUSES, notifyReport } from "./state";
@@ -18,13 +19,18 @@ export type CreateReportArgs = {
   entitlements: Entitlements;
   now: Date;
   maxActiveReports: number;
+  /** Input-caused failures allowed per rolling 24 hours (see INPUT_FAILURE_CODES). */
+  maxFailedReportsPerDay?: number;
 };
+
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 export type CreateReportResult =
   | { status: "created"; reportId: string }
   | { status: "duplicate"; reportId: string }
   | { status: "limit_reached"; feature: Feature }
-  | { status: "too_many_active"; limit: number };
+  | { status: "too_many_active"; limit: number }
+  | { status: "too_many_failures"; limit: number };
 
 /**
  * Creates a report in one transaction: per-user advisory lock, idempotency
@@ -56,6 +62,20 @@ export async function createReport(
     if ((active?.value ?? 0) >= args.maxActiveReports) {
       return { status: "too_many_active", limit: args.maxActiveReports };
     }
+
+    const failureLimit = args.maxFailedReportsPerDay ?? 5;
+    const [failures] = await tx
+      .select({ value: count() })
+      .from(report)
+      .where(
+        and(
+          eq(report.userId, args.userId),
+          eq(report.status, "failed"),
+          inArray(report.errorCode, [...INPUT_FAILURE_CODES]),
+          gt(report.createdAt, new Date(args.now.getTime() - DAY_MS)),
+        ),
+      );
+    if ((failures?.value ?? 0) >= failureLimit) return { status: "too_many_failures", limit: failureLimit };
 
     const bucketId = await ensureBucket(tx, quotaTarget(args.userId, feature, args.entitlements, args.now));
     if (!(await reserveUnit(tx, bucketId))) return { status: "limit_reached", feature };

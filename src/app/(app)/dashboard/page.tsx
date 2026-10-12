@@ -43,9 +43,9 @@ export default async function DashboardPage() {
           to keep your {PLANS[entitlements.plan].name} plan.
         </Alert>
       ) : null}
-      {subscription?.cancelAtPeriodEnd && subscription.periodEnd ? (
+      {subscription?.endsAt ? (
         <Alert tone="info">
-          Your {PLANS[entitlements.plan].name} plan ends on {formatDay(subscription.periodEnd)}. You can resume it from{" "}
+          Your {PLANS[entitlements.plan].name} plan ends on {formatDay(subscription.endsAt)}. You can resume it from{" "}
           <Link href="/billing" className="font-medium underline">
             billing
           </Link>

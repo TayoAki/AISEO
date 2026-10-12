@@ -32,8 +32,9 @@ export type ReportDTO = {
   keyword: KeywordResult | null;
   visibility: VisibilityResult | null;
   /**
-   * locked: the viewer's plan doesn't include insights (show an upgrade prompt).
-   * notGenerated: the report ran on a free plan, so insights don't exist.
+   * included: the paid sections are in the payload.
+   * locked: the report has paid sections but the viewer's plan doesn't include insights.
+   * notGenerated: the report has no paid sections (it ran on the Free plan).
    */
   insights: "included" | "locked" | "notGenerated";
 };
@@ -65,8 +66,10 @@ export function serializeReport(row: ReportRow, viewer: Entitlements): ReportDTO
       }
     }
   }
-  // Free viewers never receive paid sections; paid viewers see them when they exist.
-  const insights: ReportDTO["insights"] = !viewer.insights ? "locked" : generated ? "included" : "notGenerated";
+  // Reports run on Free never have paid sections, so upgrading can't unlock them.
+  // Paid-tier sections are only sent to viewers whose current plan includes insights.
+  const insights: ReportDTO["insights"] =
+    row.tier === "free" ? "notGenerated" : !viewer.insights ? "locked" : generated ? "included" : "notGenerated";
 
   return {
     id: row.id,

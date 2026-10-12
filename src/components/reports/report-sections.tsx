@@ -94,16 +94,18 @@ export function BulletList({ items }: { items: string[] }) {
 }
 
 /**
- * Paid sections. The server never sends their content to free viewers, so
- * "locked" renders an upgrade prompt rather than hiding real data.
+ * Paid sections. The server never sends their content to viewers without
+ * insights, so "locked" renders an upgrade prompt rather than hiding data.
  */
 export function PaidSection({
   state,
+  viewerIsPaid,
   title,
   description,
   children,
 }: {
   state: ReportDTO["insights"];
+  viewerIsPaid: boolean;
   title: string;
   description: string;
   children: React.ReactNode;
@@ -127,11 +129,19 @@ export function PaidSection({
             Upgrade to unlock
           </ButtonLink>
         </>
-      ) : (
+      ) : viewerIsPaid ? (
         <p className="text-sm text-muted-foreground">
-          This report ran on the Free plan, so this section wasn&apos;t generated. New reports on your current plan
-          include it.
+          This report ran on the Free plan, so it doesn&apos;t include this section. New reports on your plan do.
         </p>
+      ) : (
+        <>
+          <p className="text-sm text-muted-foreground">
+            {description} Included in every report you run on Pro or Plus.
+          </p>
+          <ButtonLink href="/billing" size="sm" variant="secondary">
+            See plans
+          </ButtonLink>
+        </>
       )}
     </Card>
   );

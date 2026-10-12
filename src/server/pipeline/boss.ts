@@ -23,8 +23,8 @@ export function createBoss(role: BossRole, connectionString = getEnv().DATABASE_
     createSchema: role !== "web",
     instanceName: `aiseo-${role}`,
   });
-  boss.on("error", (error: Error) => {
-    console.error(`[pg-boss:${role}] error`, { message: error.message });
+  boss.on("error", (error: Error & { queue?: string }) => {
+    console.error(`[pg-boss:${role}] error`, { queue: error.queue, stack: error.stack ?? error.message });
   });
   return boss;
 }

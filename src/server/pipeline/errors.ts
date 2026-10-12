@@ -18,6 +18,13 @@ export const FAILURE_MESSAGES = {
 export type FailureCode = keyof typeof FAILURE_MESSAGES;
 
 /**
+ * Failures a user's own input can cause after money was already spent on
+ * the report (collection or model calls). They're refunded like any other
+ * failure, so they count toward a daily cap to stop deliberate repetition.
+ */
+export const INPUT_FAILURE_CODES = ["NO_USABLE_ANSWERS", "ANALYSIS_DECLINED", "PROMPTS_FAILED"] as const satisfies readonly FailureCode[];
+
+/**
  * Thrown for failures that retrying cannot fix (bad config, refusals, empty
  * collections). Job handlers fail the report immediately instead of retrying.
  */
@@ -33,7 +40,8 @@ export class NonRetryableError extends Error {
   }
 }
 
+/** Internal error description (with stack) for logs and report.failure_detail. */
 export function describeError(error: unknown): string {
-  if (error instanceof Error) return `${error.name}: ${error.message}`.slice(0, 2000);
-  return String(error).slice(0, 2000);
+  if (error instanceof Error) return (error.stack ?? `${error.name}: ${error.message}`).slice(0, 4000);
+  return String(error).slice(0, 4000);
 }

@@ -34,7 +34,17 @@ export type Advance = {
   markStarted?: boolean;
 };
 
-/** Moves an active report forward. Progress never goes backwards. */
+/** Statuses a report may be in to move to each active status: never backwards. */
+const ADVANCE_FROM: Record<ActiveStatus, ActiveStatus[]> = {
+  queued: ["queued"],
+  collecting: ["queued", "collecting"],
+  analyzing: ["queued", "collecting", "analyzing"],
+};
+
+/**
+ * Moves an active report forward. Neither status nor progress ever goes
+ * backwards, so a late or duplicate job can't undo later progress.
+ */
 export async function advanceReport(db: Executor, reportId: string, update: Advance): Promise<boolean> {
   const rows = await db
     .update(report)
@@ -44,7 +54,7 @@ export async function advanceReport(db: Executor, reportId: string, update: Adva
       progress: sql`greatest(${report.progress}, ${update.progress})`,
       ...(update.markStarted ? { startedAt: sql`coalesce(${report.startedAt}, now())` } : {}),
     })
-    .where(and(eq(report.id, reportId), inArray(report.status, [...ACTIVE_STATUSES])))
+    .where(and(eq(report.id, reportId), inArray(report.status, ADVANCE_FROM[update.status])))
     .returning({ id: report.id });
   if (rows.length === 0) return false;
   await notifyReport(db, reportId);

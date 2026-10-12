@@ -93,7 +93,7 @@ Create a widget for your domain (managed mode) and use its site key and secret k
 
 ### Resend
 
-Verify your sending domain and use an address on it for `EMAIL_FROM`.
+Verify your sending domain and use an address on it for `EMAIL_FROM`. The web service refuses to start with the placeholder (`localhost` or `example.com`) sender, because Resend would reject every verification email.
 
 ### Bright Data
 
@@ -141,6 +141,10 @@ Restores create a sibling database service. Point `DATABASE_URL` at it to cut ov
 | `[stripe] invoice payment failed` | A renewal failed; the user was emailed |
 | `[realtime] listener error` | The LISTEN connection dropped; it reconnects automatically |
 | `[turnstile] verification unavailable` | Cloudflare unreachable; free report creation is refused until it recovers |
+| `[turnstile] configuration error` | Cloudflare rejected `TURNSTILE_SECRET_KEY`; every check fails until it's fixed |
+| `[email] send failed` | Resend rejected or didn't answer; check the key, sender domain and Resend status |
+| `[pipeline] report failed after exhausting retries` | A job kept failing until pg-boss dead-lettered it (credit refunded) |
+| `[stripe] no local row for subscription` | A Stripe subscription has no matching row (usually a checkout that didn't finish) |
 
 ### Rotating secrets
 

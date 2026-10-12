@@ -83,6 +83,7 @@ describe("ensureBucket", () => {
         periodEnd: new Date("2027-01-20T00:00:00Z"),
         billingInterval: "year",
         cancelAtPeriodEnd: false,
+        endsAt: null,
       },
     };
     const october = await ensureBucket(db, quotaTarget(userId, "keyword", pro, new Date("2026-10-25T00:00:00Z")));
@@ -90,6 +91,67 @@ describe("ensureBucket", () => {
     expect(october).not.toBe(november);
     expect((await bucketRow(october)).quota).toBe(100);
     expect((await bucketRow(october)).windowStart.toISOString()).toBe("2026-10-20T00:00:00.000Z");
+  });
+});
+
+function proMonthly(periodStart: string, periodEnd: string, billingInterval = "month"): Entitlements {
+  return {
+    plan: "pro",
+    isPaid: true,
+    insights: true,
+    subscription: {
+      plan: "pro",
+      status: "active",
+      periodStart: new Date(periodStart),
+      periodEnd: new Date(periodEnd),
+      billingInterval,
+      cancelAtPeriodEnd: false,
+      endsAt: null,
+    },
+  };
+}
+
+describe("paid billing periods", () => {
+  it("keeps one allowance per period for month-end anchors (Feb 28 -> Mar 31)", async () => {
+    const period = proMonthly("2026-02-28T00:00:00Z", "2026-03-31T00:00:00Z");
+    const early = await ensureBucket(db, quotaTarget(userId, "visibility", period, new Date("2026-03-01T00:00:00Z")));
+    const late = await ensureBucket(db, quotaTarget(userId, "visibility", period, new Date("2026-03-29T00:00:00Z")));
+    expect(late).toBe(early);
+  });
+
+  it("does not restart the allowance when switching monthly <-> annual mid-window", async () => {
+    const monthly = proMonthly("2026-03-05T00:00:00Z", "2026-04-05T00:00:00Z");
+    const first = await ensureBucket(db, quotaTarget(userId, "visibility", monthly, new Date("2026-03-06T00:00:00Z")));
+    for (let i = 0; i < 25; i++) expect(await reserveUnit(db, first)).toBe(true);
+
+    // Stripe resets the anchor to the switch time when the interval changes.
+    const annual = proMonthly("2026-03-10T00:00:00Z", "2027-03-10T00:00:00Z", "year");
+    const switchedNow = new Date("2026-03-10T00:05:00Z");
+    const second = await ensureBucket(db, quotaTarget(userId, "visibility", annual, switchedNow));
+    expect(second).toBe(first);
+    expect(await reserveUnit(db, second)).toBe(false);
+    expect((await bucketRow(second)).windowEnd?.toISOString()).toBe("2026-04-10T00:00:00.000Z");
+
+    const backToMonthly = proMonthly("2026-03-12T00:00:00Z", "2026-04-12T00:00:00Z");
+    const third = await ensureBucket(db, quotaTarget(userId, "visibility", backToMonthly, new Date("2026-03-12T00:05:00Z")));
+    expect(third).toBe(first);
+
+    const summary = await getUsageSummary(db, userId, backToMonthly, new Date("2026-03-12T00:05:00Z"));
+    expect(summary.visibility.remaining).toBe(0);
+    expect(summary.visibility.resetsAt?.toISOString()).toBe("2026-04-12T00:00:00.000Z");
+
+    // The next billing period opens a fresh allowance.
+    const nextPeriod = proMonthly("2026-04-12T00:00:00Z", "2026-05-12T00:00:00Z");
+    const fresh = await ensureBucket(db, quotaTarget(userId, "visibility", nextPeriod, new Date("2026-04-12T01:00:00Z")));
+    expect(fresh).not.toBe(first);
+  });
+
+  it("keeps the same bucket when a renewal is recorded late", async () => {
+    const stale = proMonthly("2026-02-28T00:00:00Z", "2026-03-31T00:00:00Z");
+    const beforeWebhook = await ensureBucket(db, quotaTarget(userId, "keyword", stale, new Date("2026-03-31T00:30:00Z")));
+    const renewed = proMonthly("2026-03-31T00:00:00Z", "2026-04-30T00:00:00Z");
+    const afterWebhook = await ensureBucket(db, quotaTarget(userId, "keyword", renewed, new Date("2026-03-31T01:00:00Z")));
+    expect(afterWebhook).toBe(beforeWebhook);
   });
 });
 

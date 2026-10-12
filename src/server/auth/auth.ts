@@ -1,7 +1,9 @@
+import { randomBytes } from "node:crypto";
+
 import { stripe } from "@better-auth/stripe";
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
-import { APIError } from "better-auth/api";
+import { APIError, createAuthMiddleware } from "better-auth/api";
 import { nextCookies } from "better-auth/next-js";
 import { captcha } from "better-auth/plugins";
 import { eq } from "drizzle-orm";
@@ -12,11 +14,17 @@ import { PLANS } from "../billing/plans";
 import { getDb } from "../db/client";
 import { account, rateLimit, session, subscription, user, verification } from "../db/schema";
 import { sendEmail } from "../email/send";
-import { resetPasswordEmail, verificationEmail } from "../email/templates";
+import { existingAccountEmail, resetPasswordEmail, verificationEmail } from "../email/templates";
 import { assertProductionConfig, getEnv } from "../env";
 import { isDisposableEmail, normalizeEmail } from "./email-policy";
 
-const SIGN_UP_REJECTED = "We couldn't create an account with this email address. Try signing in, or use a different address.";
+/**
+ * User fields that must never come from a request body. The Stripe plugin
+ * declares stripeCustomerId without `input: false`, and plugin field
+ * definitions override ours, so the guard is a request hook.
+ */
+const PROTECTED_USER_FIELDS = ["stripeCustomerId", "normalizedEmail", "emailVerified"];
+const USER_INPUT_PATHS = new Set(["/sign-up/email", "/update-user"]);
 
 function createAuth() {
   const env = getEnv();
@@ -24,8 +32,16 @@ function createAuth() {
   const db = getDb();
 
   // Placeholders keep the plugin's endpoints typed when billing is off locally;
-  // the UI hides billing actions unless env.billingEnabled is true.
+  // the UI hides billing actions unless env.billingEnabled is true. The webhook
+  // secret is random in that case, so nobody can forge a subscription event.
   const stripeClient = new Stripe(env.STRIPE_SECRET_KEY ?? "sk_test_billing_disabled");
+  const stripeWebhookSecret = env.STRIPE_WEBHOOK_SECRET ?? `whsec_${randomBytes(32).toString("hex")}`;
+
+  // Tells the owner of an inbox that it already has an account, instead of
+  // revealing that to whoever is signing up. Failures are logged by sendEmail.
+  const notifyExistingAccount = async (email: string) => {
+    await sendEmail(existingAccountEmail(email, env.APP_URL)).catch(() => undefined);
+  };
 
   return betterAuth({
     appName: "AISEO",
@@ -45,6 +61,10 @@ function createAuth() {
       resetPasswordTokenExpiresIn: 60 * 60,
       sendResetPassword: async ({ user: account, url }) => {
         await sendEmail(resetPasswordEmail(account.email, account.name, url));
+      },
+      // Sign-up answers exactly as if it succeeded, so it can't reveal which emails have accounts.
+      onExistingUserSignUp: async ({ user: account }) => {
+        await notifyExistingAccount(account.email);
       },
     },
     emailVerification: {
@@ -76,6 +96,8 @@ function createAuth() {
       window: 60,
       max: 100,
       customRules: {
+        // Signed by Stripe and delivered in bursts from a few IPs; never throttle it.
+        "/stripe/webhook": false,
         "/sign-up/email": { window: 60 * 60, max: 5 },
         "/sign-in/email": { window: 60, max: 10 },
         "/request-password-reset": { window: 60 * 60, max: 5 },
@@ -85,6 +107,15 @@ function createAuth() {
     advanced: {
       ipAddress: { ipAddressHeaders: [env.TRUSTED_IP_HEADER] },
       useSecureCookies: env.NODE_ENV === "production",
+    },
+    hooks: {
+      before: createAuthMiddleware(async (ctx) => {
+        if (!USER_INPUT_PATHS.has(ctx.path) || !ctx.body || typeof ctx.body !== "object") return;
+        const forbidden = PROTECTED_USER_FIELDS.filter((field) => field in ctx.body);
+        if (forbidden.length > 0) {
+          throw new APIError("BAD_REQUEST", { message: `${forbidden.join(", ")} can't be set` });
+        }
+      }),
     },
     databaseHooks: {
       user: {
@@ -100,8 +131,14 @@ function createAuth() {
               .from(user)
               .where(eq(user.normalizedEmail, normalizedEmail))
               .limit(1);
-            if (alias) throw new APIError("BAD_REQUEST", { message: SIGN_UP_REJECTED });
-            return { data: { ...data, normalizedEmail } };
+            if (alias) {
+              // An alias (jane+1@, j.a.n.e@gmail.com) of an existing account. FORBIDDEN makes
+              // Better Auth return its generic sign-up response, so this reveals nothing.
+              await notifyExistingAccount(email);
+              throw new APIError("FORBIDDEN", { message: "Account already exists" });
+            }
+            const { stripeCustomerId: _ignored, ...rest } = data as typeof data & { stripeCustomerId?: unknown };
+            return { data: { ...rest, normalizedEmail } };
           },
         },
       },
@@ -114,7 +151,7 @@ function createAuth() {
       }),
       stripe({
         stripeClient,
-        stripeWebhookSecret: env.STRIPE_WEBHOOK_SECRET ?? "whsec_billing_disabled",
+        stripeWebhookSecret,
         createCustomerOnSignUp: false,
         onEvent: handleStripeEvent,
         subscription: {
