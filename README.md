@@ -5,6 +5,7 @@ Keyword research and AI search visibility for marketers. AISEO collects live ans
 - **Keyword reports**: opportunity score, most-cited domains, source mix, competing brands, prompts to target and keyword clusters for any keyword in 20 markets.
 - **AI visibility scans**: five neutral buyer questions on ChatGPT and Gemini, scored by how often your brand is mentioned and your site cited, prompt by prompt.
 - **Plans**: Free (2 + 2 reports, once), Pro and Plus (monthly allowances plus AI insights and recommendations), billed through Stripe. Failed reports never use a credit.
+- **Admin cost page**: `/admin/costs` shows revenue, what each report really costs, margins per plan and a what-if calculator, for the accounts listed in `ADMIN_EMAILS`.
 
 This is a ground-up rebuild of the RankSEO tutorial app with a simpler, more robust architecture. The review of the original is in [`docs/rankseo-review`](docs/rankseo-review/ARCHITECTURE-REVIEW.md), and the platform decision in [`reports/`](reports/InsForge%20vs%20Better%20Auth%20and%20Railway.md).
 

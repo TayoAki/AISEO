@@ -62,6 +62,8 @@ export default defineRailway((ctx) => {
       STRIPE_PRICE_PRO_ANNUAL: preserve(),
       STRIPE_PRICE_PLUS_MONTHLY: preserve(),
       STRIPE_PRICE_PLUS_ANNUAL: preserve(),
+      // Accounts that can open /admin/costs (comma-separated emails).
+      ADMIN_EMAILS: preserve(),
       MAX_ACTIVE_REPORTS_PER_USER: "3",
       MAX_FAILED_REPORTS_PER_DAY: "5",
     },

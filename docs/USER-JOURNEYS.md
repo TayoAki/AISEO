@@ -23,6 +23,7 @@ This document describes every path a person can take through AISEO and the backg
    - [J13. Change plan, switch billing period, cancel](#j13-change-plan-switch-billing-period-cancel)
    - [J14. A payment fails](#j14-a-payment-fails)
    - [J15. Account settings and signing out](#j15-account-settings-and-signing-out)
+   - [J16. Admin: costs and margins](#j16-admin-costs-and-margins)
 5. System flows
    - [S1. Report state machine](#s1-report-state-machine)
    - [S2. Credits: reserve, commit, release](#s2-credits-reserve-commit-release)
@@ -115,6 +116,7 @@ Postgres is the only stateful dependency. It holds application tables, the job q
 | `/reports/:id` | owner only | Live progress, results, or failure details |
 | `/billing` | signed in | Plan, allowance, upgrade/switch, Stripe portal |
 | `/settings` | signed in | Name, password, sign out other devices |
+| `/admin/costs` | admins only | Revenue, provider spend, cost per report, plan margins, what-if calculator |
 
 `src/proxy.ts` redirects requests without a session cookie from signed-in routes to `/sign-in?next=<path>`. This is only a convenience: every page and API route checks the session again on the server (`src/server/web/session.ts`, `src/server/web/api.ts`).
 
@@ -378,6 +380,19 @@ After paying:
 - **Devices**: "Sign out other devices" revokes every other session.
 - **Sign out** (header or mobile menu): ends the session, then reloads to `/sign-in` so no signed-in page stays in the browser cache.
 
+### J16. Admin: costs and margins
+
+Admins are the verified accounts whose email is listed in `ADMIN_EMAILS` on the web service. There is no admin role in the database, so nobody can grant themselves access through the app. Admins see a **Costs** link in the header that opens `/admin/costs`; everyone else gets the same "Not found" page as a missing report, and signed-out visitors go to sign-in. The page shows aggregates only, never report content.
+
+The page covers the last 7, 30 or 90 days:
+
+- **Headline numbers**: monthly recurring revenue from live subscriptions (one per user at their best plan, annual plans counted per month), provider spend split between Claude and Bright Data, the all-in cost of a paid report (failed reports' cost spread over delivered ones), and the period's gross margin: revenue minus provider spend, estimated Stripe fees and fixed costs.
+- **Plan economics**: for each plan and billing period, the price per month, Stripe fees, the share of the allowance subscribers actually use (completed reports per subscriber, scaled to 30 days), the report cost at that use and at full use, and the margin for both.
+- **What-if calculator**: change customer counts, allowance use, free signups, per-report costs and fixed costs to see one month's revenue, every cost line and the margin. It starts from the live numbers, or from example values (70 Pro and 30 Plus customers) while there are no paying customers.
+- **Details**: cost per report by type and plan (average, 90th percentile, totals, the cost of failed reports), where the money goes (each provider step with calls, tokens, records and cost), the free plan's cost (signups, free reports, cost per signup), and the ten accounts that cost the most.
+
+Report costs are measured from `report_usage` (S10) once reports exist; until then the page uses estimates and labels them. A warning appears if a Claude call used a model with no price in `costs.ts`. The other assumptions (Stripe rates, fixed monthly costs, the estimates) live in `src/lib/cost-model.ts`.
+
 ---
 
 ## 5. System flows
@@ -483,7 +498,7 @@ Without `RESEND_API_KEY` (local development), emails are printed to the web serv
 
 ### S10. Cost tracking
 
-Every paid provider call is recorded per report in `report_usage` (`src/server/pipeline/costs.ts`). Each Claude request records its tokens and the model that served it (with a refusal fallback, each attempt at its own model's rates), and each delivered Bright Data snapshot records its rows once, even if a retried job downloads it again. Costs are stored in micro-dollars from list prices, and retries and failed (refunded) reports are included, because they are billed. Recording never fails a job, since that would retry it and pay twice. Queries for cost per report and per plan are in `docs/DEPLOY-RAILWAY.md`.
+Every paid provider call is recorded per report in `report_usage` (`src/server/pipeline/costs.ts`). Each Claude request records its tokens and the model that served it (with a refusal fallback, each attempt at its own model's rates), and each delivered Bright Data snapshot records its rows once, even if a retried job downloads it again. Costs are stored in micro-dollars from list prices, and retries and failed (refunded) reports are included, because they are billed. Recording never fails a job, since that would retry it and pay twice. The admin cost page (J16) summarizes these costs; ad-hoc SQL queries are in `docs/DEPLOY-RAILWAY.md`.
 
 ### S11. Abuse and cost controls
 
@@ -534,4 +549,5 @@ Each report costs real money (Bright Data scrapes and Claude tokens), so free us
 | J11 history | `src/app/(app)/reports/page.tsx`, `report-list.tsx` | `src/server/reports/queries.ts` |
 | J12–J14 billing | `src/app/(app)/billing`, `src/components/billing/*` | Stripe plugin in `auth.ts`, `src/server/billing/*` |
 | J15 settings | `src/app/(app)/settings`, `src/components/settings/*` | Better Auth endpoints |
+| J16 admin costs | `src/app/(app)/admin/costs`, `src/components/admin/cost-calculator.tsx` | `src/server/admin/*`, `src/lib/cost-model.ts`, `requireAdmin` in `src/server/web/session.ts` |
 | Data model | n/a | `src/server/db/schema/*`, `drizzle/` migrations |

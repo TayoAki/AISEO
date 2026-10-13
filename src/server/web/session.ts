@@ -1,9 +1,10 @@
 import "server-only";
 
 import { headers } from "next/headers";
-import { redirect } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { cache } from "react";
 
+import { isAdmin } from "../admin/admins";
 import { getAuth } from "../auth/auth";
 import { getEntitlements, type Entitlements } from "../billing/entitlements";
 import { getDb } from "../db/client";
@@ -22,6 +23,13 @@ export async function requireUser(): Promise<SessionUser> {
   if (!session) redirect("/sign-in");
   if (!session.user.emailVerified) redirect("/verify-email");
   return session.user;
+}
+
+/** For admin pages: everyone else gets a 404, so the page's existence isn't revealed. */
+export async function requireAdmin(): Promise<SessionUser> {
+  const user = await requireUser();
+  if (!isAdmin(user)) notFound();
+  return user;
 }
 
 export type Viewer = {

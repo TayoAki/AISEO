@@ -57,7 +57,8 @@ railway variable set --service web --skip-deploys \
   "RESEND_API_KEY=re_..." "EMAIL_FROM=AISEO <no-reply@yourdomain.com>" \
   "STRIPE_SECRET_KEY=sk_live_..." "STRIPE_WEBHOOK_SECRET=whsec_..." \
   "STRIPE_PRICE_PRO_MONTHLY=price_..." "STRIPE_PRICE_PRO_ANNUAL=price_..." \
-  "STRIPE_PRICE_PLUS_MONTHLY=price_..." "STRIPE_PRICE_PLUS_ANNUAL=price_..."
+  "STRIPE_PRICE_PLUS_MONTHLY=price_..." "STRIPE_PRICE_PLUS_ANNUAL=price_..." \
+  "ADMIN_EMAILS=you@yourdomain.com"
 
 railway variable set --service worker --skip-deploys \
   "ANTHROPIC_API_KEY=sk-ant-..." "BRIGHTDATA_API_TOKEN=..."
@@ -65,6 +66,8 @@ railway variable set --service worker --skip-deploys \
 railway redeploy --service web --yes
 railway redeploy --service worker --yes
 ```
+
+`ADMIN_EMAILS` (comma-separated) lists the accounts that can open the admin cost page at `/admin/costs` once they sign up and verify their email; leave it unset to have no admins.
 
 Each service holds only the secrets it uses. The web service never sees provider keys; the worker never sees auth or Stripe secrets. `DATABASE_URL` is wired to the `Postgres` database by the IaC file, and `RAILPACK_NODE_VERSION=22` pins the Node major both services build with. Check what a service has with `railway variable list --service web`.
 
@@ -145,7 +148,7 @@ Restores create a sibling database service. Point `DATABASE_URL` at it to cut ov
 
 ### What each report costs
 
-Every paid call is recorded in the `report_usage` table: each Claude request (tokens and the model that served it, priced from `src/server/pipeline/costs.ts`) and each delivered Bright Data snapshot (records, priced at `BRIGHTDATA_COST_PER_1K_RECORDS`, counted once even when a retried job downloads it again). Retries and failed reports are included, since they are billed too. The worker also logs `[pipeline] report completed` with `costUsd`. Run these with `railway connect Postgres`:
+Sign in with an account listed in `ADMIN_EMAILS` and open **Costs** (`/admin/costs`) for revenue, provider spend, cost per report, plan margins and a what-if calculator. Underneath, every paid call is recorded in the `report_usage` table: each Claude request (tokens and the model that served it, priced from `src/server/pipeline/costs.ts`) and each delivered Bright Data snapshot (records, priced at `BRIGHTDATA_COST_PER_1K_RECORDS`, counted once even when a retried job downloads it again). Retries and failed reports are included, since they are billed too. The worker also logs `[pipeline] report completed` with `costUsd`. Run these with `railway connect Postgres`:
 
 ```sql
 -- Cost per report type and plan over the last 30 days

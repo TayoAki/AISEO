@@ -25,6 +25,17 @@ const envSchema = z
     BETTER_AUTH_SECRET: z.string().min(32).default(DEV_SECRET),
     /** Header that carries the real client IP behind the platform proxy. */
     TRUSTED_IP_HEADER: z.string().default("x-real-ip"),
+    /** Comma-separated emails whose verified accounts can open the admin pages (/admin/costs). */
+    ADMIN_EMAILS: z
+      .string()
+      .default("")
+      .transform((value) =>
+        value
+          .split(",")
+          .map((email) => email.trim().toLowerCase())
+          .filter(Boolean),
+      )
+      .pipe(z.array(z.email())),
 
     TURNSTILE_SITE_KEY: z.string().default(TURNSTILE_TEST_SITE_KEY),
     TURNSTILE_SECRET_KEY: z.string().default(TURNSTILE_TEST_SECRET_KEY),

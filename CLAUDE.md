@@ -16,6 +16,7 @@ Next.js 16 app plus a pg-boss worker on one Postgres. Read `docs/USER-JOURNEYS.m
 - **Credits** change only through `src/server/quota/quota.ts` (`reserveUnit`, `settleReservation`). Never update `usage_bucket` directly. Every path that ends a report must commit or release exactly once.
 - **Paywall**: reports reach browsers only through `serializeReport` / `serializeReportSummary` / `serializeProgress` in `src/server/reports/serialize.ts`. Never return `report.result` or `failure_detail` directly.
 - **Ownership**: read reports with the owner-scoped helpers in `src/server/reports/queries.ts`.
+- **Admin pages** call `requireAdmin()` (`src/server/web/session.ts`); admins are verified accounts listed in `ADMIN_EMAILS`. The queries in `src/server/admin/` read across users, so they return aggregates only and are used only by admin pages.
 - **Pipeline jobs** (`src/server/pipeline/jobs.ts`) must be idempotent: check state first, persist anything expensive (prompts, snapshot ids) before the next step. Throw `NonRetryableError` with a `FAILURE_MESSAGES` code for permanent failures; anything else is retried, then dead-lettered.
 - **Configuration** goes through `getEnv()` in `src/server/env.ts`. A new variable also needs `.env.example`, `.railway/railway.ts` (with `preserve()` for secrets) and, if production requires it, the right role in `assertProductionConfig`.
 - **Input validation**: report inputs use the Zod schemas in `src/lib/report-input.ts`, shared by the forms and the API.

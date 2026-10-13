@@ -15,16 +15,21 @@ const LINKS = [
   { href: "/billing", label: "Billing" },
   { href: "/settings", label: "Settings" },
 ];
+const ADMIN_LINK = { href: "/admin/costs", label: "Costs" };
+
+function linksFor(isAdmin: boolean) {
+  return isAdmin ? [...LINKS, ADMIN_LINK] : LINKS;
+}
 
 function isActive(pathname: string, href: string) {
   return pathname === href || pathname.startsWith(`${href}/`);
 }
 
-export function AppNav() {
+export function AppNav({ isAdmin = false }: { isAdmin?: boolean }) {
   const pathname = usePathname();
   return (
     <nav aria-label="Main" className="hidden items-center gap-1 text-sm lg:flex">
-      {LINKS.map((link) => (
+      {linksFor(isAdmin).map((link) => (
         <Link
           key={link.href}
           href={link.href}
@@ -61,7 +66,7 @@ export function SignOutButton({ className }: { className?: string }) {
 }
 
 /** Small-screen menu: a native <details> disclosure that closes on navigation. */
-export function MobileNav({ email }: { email: string }) {
+export function MobileNav({ email, isAdmin = false }: { email: string; isAdmin?: boolean }) {
   const pathname = usePathname();
   const details = useRef<HTMLDetailsElement>(null);
 
@@ -77,7 +82,7 @@ export function MobileNav({ email }: { email: string }) {
       <div className="absolute right-0 z-20 mt-2 w-60 rounded-xl border border-border bg-card p-2 shadow-lg">
         <p className="truncate px-3 py-2 text-xs text-muted-foreground">{email}</p>
         <nav aria-label="Main" className="flex flex-col text-sm">
-          {LINKS.map((link) => (
+          {linksFor(isAdmin).map((link) => (
             <Link
               key={link.href}
               href={link.href}
