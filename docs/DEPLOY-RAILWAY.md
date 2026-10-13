@@ -23,7 +23,7 @@ You need accounts and keys for:
 | [Bright Data](https://brightdata.com) | Collecting answers from Perplexity, ChatGPT and Gemini | API token with Web Scraper API access |
 | [Anthropic](https://console.anthropic.com) | Analysis | API key |
 
-Merge the rebuild into the branch Railway deploys from (`main` in `.railway/railway.ts`; change `SOURCE` there if you deploy another branch or a fork). If a service deploys a different branch (set in **service → Settings → Source**), `railway config apply` moves it back to `SOURCE`.
+Railway deploys the `main` branch (`SOURCE` in `.railway/railway.ts`; change it if you deploy another branch or a fork), and every push to it redeploys both services. If a service deploys a different branch (set in **service → Settings → Source**), `railway config apply` moves it back to `SOURCE`.
 
 ## 2. Create the project
 

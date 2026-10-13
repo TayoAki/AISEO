@@ -13,9 +13,7 @@
  */
 import { defineRailway, github, group, postgres, preserve, project, service } from "railway/iac";
 
-// The branch Railway deploys from. Merge the rebuild into it first: until
-// then the services deploy claude/optimistic-tesla-ky3owd (set in the
-// dashboard), and applying this file would move them to main.
+// The branch Railway deploys from: every push to it redeploys both services.
 const SOURCE = github("TayoAki/AISEO", { branch: "main" });
 
 export default defineRailway((ctx) => {
